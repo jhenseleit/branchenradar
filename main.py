@@ -36,6 +36,7 @@ SPEC_PATH = DATA_DIR / 'spec.json'
 STATUS_PATH = DATA_DIR / 'status.json'
 KOMM_PATH = DATA_DIR / 'kommentare.json'
 KOMM_STATUS_PATH = DATA_DIR / 'kommentare_status.json'
+LI_PATH = DATA_DIR / 'linkedin_posts.json'
 AUDIT_DB = DATA_DIR / 'audit.db'
 
 MODELL = os.environ.get('BRANCHENRADAR_MODELL', 'claude-opus-5')
@@ -110,13 +111,13 @@ def _spec() -> str:
 LINKEDIN_SYS = """Du schreibst einen fertigen LinkedIn-Beitrag für Jörn Henseleit, Vertriebsleiter bei der Skyport GmbH (B2B-Möbelgroßhandel, reiner Onliner: Dropshipping, 24-Stunden-Versand, über 1.300 Artikel; Kunden auch in der Schweiz, Norwegen und UK; verkauft daneben auch selbst an Endkunden). Er schreibt aus Lieferantensicht über Verlässlichkeit, Verfügbarkeit, Produktdatenqualität und Lieferzeit.
 
 Regeln:
-- Kein Berater- oder Motivationssprech, keine Floskeln, keine Emojis, keine Hashtags, keine Dreierfiguren als Stilmittel. Nicht werblich. Unbequeme Befunde nicht abmildern.
+- Kein Berater- oder Motivationssprech, keine Floskeln, keine Emojis, keine Dreierfiguren als Stilmittel. Nicht werblich. Unbequeme Befunde nicht abmildern.
 - Ungleich lange Sätze, gesprochenes Register, wie ein Kollege, der die Branche kennt und wenig Zeit hat.
 - Behaupte nie, Skyport verkaufe ausschließlich über Händler. Kein Lob auf den stationären Handel als Konzept, aber auch nicht dagegen schießen.
 - Wenn du Zahlen oder Fakten nutzt, nur belegte aus der beigefügten Faktengrundlage, und nenne die Quelle knapp (z. B. „laut bevh"). Erfinde keine Zahlen.
 - Länge etwa 120–220 Wörter, ein klarer Aufhänger, ein Kerngedanke, ein konkreter Abschluss ohne aufgesetzte Handlungsaufforderung.
 
-Gib AUSSCHLIESSLICH den fertigen Beitragstext zurück – keine Vorrede, keine Überschrift, keine Hashtags, keine Varianten, keine Meta-Kommentare."""
+Setze ans Ende des Beitrags maximal fünf passende, spezifische Hashtags in einer eigenen Zeile (deutsch, branchenbezogen – z. B. #Möbelhandel #Onlinehandel #Dropshipping #Logistik #Verpackungsverordnung; wähle nur die, die wirklich zum Beitrag passen, keine generischen Motivations-Hashtags). Gib AUSSCHLIESSLICH den fertigen Beitragstext samt dieser Hashtag-Zeile zurück – keine Vorrede, keine Überschrift, keine Varianten, keine Meta-Kommentare, keine Emojis."""
 
 
 def _erzeuge_linkedin(thema: str, kontext_md: str = '') -> str:
@@ -338,6 +339,7 @@ def _subtabs(active: str) -> str:
         return f'<a href="{href}"{cls}>{label}</a>'
     return ('<div class="subtabs">'
             + a('ueberblick', 'Wochenüberblick', '/')
+            + a('linkedin', 'LinkedIn-Beiträge', '/linkedin')
             + a('kommentare', 'LinkedIn-Kommentare', '/kommentare')
             + '</div>')
 
@@ -428,33 +430,97 @@ def _status():
     return _lade(STATUS_PATH, {}) or {}
 
 
-def _linkedin_card(draft: str = '', thema: str = '') -> str:
+def _li_laden():
+    liste = _lade(LI_PATH, [])
+    return liste if isinstance(liste, list) else []
+
+
+def _li_speichern(text: str, thema: str = '') -> str:
+    posts = _li_laden()
+    jetzt = datetime.now()
+    pid = secrets.token_hex(6)
+    posts.insert(0, {'id': pid, 'ts': jetzt.isoformat(timespec='seconds'),
+                     'datum': jetzt.strftime('%d.%m.%Y'), 'thema': (thema or '').strip(),
+                     'text': (text or '').strip()})
+    _sichere(LI_PATH, posts[:40])
+    return pid
+
+
+def _li_aktualisieren(pid: str, text: str) -> str:
+    posts = _li_laden()
+    for p in posts:
+        if p.get('id') == pid:
+            p['text'] = (text or '').strip()
+            _sichere(LI_PATH, posts)
+            return pid
+    return _li_speichern(text)
+
+
+def _li_loeschen(pid: str):
+    _sichere(LI_PATH, [p for p in _li_laden() if p.get('id') != pid])
+
+
+def _kopier_btn(elem_id: str, label: str = 'Kopieren') -> str:
+    return ('<button class="btn ghost" type="button" onclick="'
+            f"var t=document.getElementById('{elem_id}');t.select();document.execCommand('copy');"
+            f'this.textContent=\'Kopiert &#10003;\'">{label}</button>')
+
+
+def _linkedin_html(draft: str = '', thema: str = '', saved_id: str = '') -> str:
     ki_aktiv = bool(os.environ.get('ANTHROPIC_API_KEY'))
     aktiv = '' if ki_aktiv else ' disabled'
-    ergebnis = ''
-    if draft:
-        ergebnis = (
-            '<label style="margin-top:12px;display:block;font-size:13px;color:#5b6672;font-weight:600">'
-            'Entwurf (bearbeiten, dann kopieren)</label>'
-            f'<textarea id="lidraft" rows="12" style="width:100%">{_esc(draft)}</textarea>'
-            '<div class="row"><button class="btn ghost" type="button" onclick="'
-            "var t=document.getElementById('lidraft');t.select();document.execCommand('copy');"
-            'this.textContent=\'Kopiert &#10003;\'">Kopieren</button></div>')
-    return (
-        '<details class="klapp statusbox" style="margin-top:18px"' + (' open' if draft else '') + '>'
-        '<summary style="cursor:pointer;font-weight:600;list-style:none">LinkedIn-Beitrag entwerfen</summary>'
-        '<div style="margin-top:10px">'
-        '<p class="hint" style="margin-top:0">Aufhänger/Kerngedanke aus dem Überblick oben (oder eigenes '
-        'Thema). Claude formuliert einen fertigen Beitrag in deinem Ton &ndash; du bearbeitest und gibst '
-        'ihn frei.</p>'
+    kistat = ('' if ki_aktiv else
+              '<div class="row" style="margin-top:2px"><span class="badge warn">Kein '
+              '<code>ANTHROPIC_API_KEY</code> &ndash; Erstellung nicht möglich</span></div>')
+
+    form = (
+        '<div class="statusbox" style="margin-top:14px">'
+        '<div class="step"><span class="ttl">Neuen Beitrag entwerfen</span></div>'
+        '<p class="hint" style="margin:4px 0 0">Aufhänger/Kerngedanke (oder eigenes Thema). Claude '
+        'formuliert einen fertigen Beitrag in deinem Ton mit bis zu 5 passenden Hashtags. Der Entwurf '
+        'wird automatisch gespeichert &ndash; du bearbeitest, kopierst und postest selbst.</p>'
         '<form method="post" action="/linkedin">'
-        '<textarea name="thema" rows="3" style="width:100%" '
+        '<textarea name="thema" rows="3" style="width:100%;margin-top:8px" '
         f'placeholder="z.B. PPWR ab 12.8. aus Lieferantensicht: wer trägt bei Dropshipping die Erzeugerpflicht?">{_esc(thema)}</textarea>'
         '<label style="display:flex;gap:8px;align-items:center;margin:8px 0;font-size:13px">'
         '<input type="checkbox" name="kontext" value="1" checked style="width:16px;height:16px;min-width:0"> '
-        'Aktuellen Überblick als Faktengrundlage nutzen</label>'
+        'Aktuellen Wochenüberblick als Faktengrundlage nutzen</label>'
         f'<div class="row"><button class="btn" type="submit"{aktiv}>Entwurf erstellen</button></div>'
-        '</form>' + ergebnis + '</div></details>')
+        '</form></div>')
+
+    ergebnis = ''
+    if draft:
+        ergebnis = (
+            '<div class="statusbox" style="margin-top:14px">'
+            '<div class="step"><span class="ttl">Entwurf (automatisch gespeichert)</span></div>'
+            '<form method="post" action="/linkedin/speichern">'
+            f'<input type="hidden" name="id" value="{_esc(saved_id)}">'
+            f'<textarea id="lidraft" name="text" rows="14" style="width:100%;margin-top:8px">{_esc(draft)}</textarea>'
+            f'<div class="row">{_kopier_btn("lidraft")} '
+            '<button class="btn" type="submit">Bearbeitete Fassung speichern</button></div>'
+            '</form></div>')
+
+    posts = _li_laden()
+    archiv = ''
+    if posts:
+        zeilen = ''
+        for p in posts:
+            pid = p.get('id') or ''
+            thema_z = (f' &middot; <span style="color:var(--muted)">{_esc(p.get("thema"))}</span>'
+                       if p.get('thema') else '')
+            zeilen += (
+                '<div class="statusbox" style="margin-top:12px">'
+                f'<div class="hint" style="margin-bottom:6px">{_esc(p.get("datum") or "")}{thema_z}</div>'
+                f'<textarea id="lp{_esc(pid)}" rows="8" style="width:100%">{_esc(p.get("text") or "")}</textarea>'
+                f'<div class="row">{_kopier_btn("lp" + pid)} '
+                f'<form method="post" action="/linkedin/{_esc(pid)}/loeschen" style="display:inline" '
+                'onsubmit="return confirm(\'Beitrag löschen?\')">'
+                '<button class="btn ghost" type="submit">Löschen</button></form></div></div>')
+        archiv = ('<div class="step" style="margin-top:26px"><span class="ttl">Gespeicherte Beiträge '
+                  f'({len(posts)})</span></div>' + zeilen)
+
+    return (_platte('LinkedIn-Beiträge &ndash; entwerfen mit Hashtags, gespeichert')
+            + _subtabs('linkedin') + kistat + form + ergebnis + archiv)
 
 
 def _startseite_html():
@@ -511,7 +577,7 @@ def _startseite_html():
     else:
         feed = ''
 
-    return kopf + _linkedin_card() + feed
+    return kopf + feed
 
 
 def _esc(s):
@@ -608,12 +674,18 @@ def kommentare_erstellen(request: Request):
     return RedirectResponse('/kommentare', status_code=303)
 
 
+@app.get('/linkedin', response_class=HTMLResponse)
+def linkedin_seite(request: Request):
+    return HTMLResponse(_seite(_linkedin_html(), request.state.user))
+
+
 @app.post('/linkedin', response_class=HTMLResponse)
 async def linkedin(request: Request):
     form = await request.form()
     thema = (form.get('thema') or '').strip()
     kontext = form.get('kontext') == '1'
     draft = ''
+    saved_id = ''
     if thema:
         md = ''
         if kontext:
@@ -622,12 +694,26 @@ async def linkedin(request: Request):
                 md = bs[0].get('md') or ''
         try:
             draft = await run_in_threadpool(_erzeuge_linkedin, thema, md)
+            saved_id = _li_speichern(draft, thema)  # automatisch speichern
         except Exception as e:  # noqa: BLE001
             draft = 'Fehler bei der Erstellung: ' + str(e)[:300]
-    inhalt = (_platte('LinkedIn-Beitrag entwerfen')
-              + '<p style="margin-top:12px"><a href="/">&larr; Zur Übersicht</a></p>'
-              + _linkedin_card(draft, thema))
-    return HTMLResponse(_seite(inhalt, request.state.user))
+    return HTMLResponse(_seite(_linkedin_html(draft, thema, saved_id), request.state.user))
+
+
+@app.post('/linkedin/speichern')
+async def linkedin_speichern(request: Request):
+    form = await request.form()
+    pid = (form.get('id') or '').strip()
+    text = (form.get('text') or '').strip()
+    if text:
+        _li_aktualisieren(pid, text) if pid else _li_speichern(text)
+    return RedirectResponse('/linkedin', status_code=303)
+
+
+@app.post('/linkedin/{lid}/loeschen')
+def linkedin_loeschen(request: Request, lid: str):
+    _li_loeschen(lid)
+    return RedirectResponse('/linkedin', status_code=303)
 
 
 @app.get('/b/{bid}', response_class=HTMLResponse)
