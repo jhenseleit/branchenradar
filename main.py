@@ -21,6 +21,7 @@ from pathlib import Path
 import markdown as _md
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import auth
@@ -102,6 +103,35 @@ def _spec() -> str:
     if isinstance(s, dict):
         return s.get('text') or DEFAULT_SPEC
     return DEFAULT_SPEC
+
+
+LINKEDIN_SYS = """Du schreibst einen fertigen LinkedIn-Beitrag für Jörn Henseleit, Vertriebsleiter bei der Skyport GmbH (B2B-Möbelgroßhandel, reiner Onliner: Dropshipping, 24-Stunden-Versand, über 1.300 Artikel; Kunden auch in der Schweiz, Norwegen und UK; verkauft daneben auch selbst an Endkunden). Er schreibt aus Lieferantensicht über Verlässlichkeit, Verfügbarkeit, Produktdatenqualität und Lieferzeit.
+
+Regeln:
+- Kein Berater- oder Motivationssprech, keine Floskeln, keine Emojis, keine Hashtags, keine Dreierfiguren als Stilmittel. Nicht werblich. Unbequeme Befunde nicht abmildern.
+- Ungleich lange Sätze, gesprochenes Register, wie ein Kollege, der die Branche kennt und wenig Zeit hat.
+- Behaupte nie, Skyport verkaufe ausschließlich über Händler. Kein Lob auf den stationären Handel als Konzept, aber auch nicht dagegen schießen.
+- Wenn du Zahlen oder Fakten nutzt, nur belegte aus der beigefügten Faktengrundlage, und nenne die Quelle knapp (z. B. „laut bevh"). Erfinde keine Zahlen.
+- Länge etwa 120–220 Wörter, ein klarer Aufhänger, ein Kerngedanke, ein konkreter Abschluss ohne aufgesetzte Handlungsaufforderung.
+
+Gib AUSSCHLIESSLICH den fertigen Beitragstext zurück – keine Vorrede, keine Überschrift, keine Hashtags, keine Varianten, keine Meta-Kommentare."""
+
+
+def _erzeuge_linkedin(thema: str, kontext_md: str = '') -> str:
+    key = os.environ.get('ANTHROPIC_API_KEY')
+    if not key:
+        raise RuntimeError('ANTHROPIC_API_KEY ist nicht gesetzt.')
+    from anthropic import Anthropic
+    client = Anthropic(api_key=key)
+    user = f'Thema / Aufhänger für den Beitrag:\n{thema}\n'
+    if kontext_md:
+        user += ('\nFaktengrundlage (aktueller Branchenüberblick – nutze nur belegte Zahlen '
+                 'mit Quelle, wenn sie zum Thema passen):\n\n' + kontext_md)
+    with client.messages.stream(model=MODELL, max_tokens=4000, system=LINKEDIN_SYS,
+                                messages=[{'role': 'user', 'content': user}]) as stream:
+        resp = stream.get_final_message()
+    return ''.join(getattr(b, 'text', '') for b in resp.content
+                   if getattr(b, 'type', None) == 'text').strip()
 
 
 # ── Zugang (nur admin) ───────────────────────────────────────────────────────
@@ -294,6 +324,35 @@ def _status():
     return _lade(STATUS_PATH, {}) or {}
 
 
+def _linkedin_card(draft: str = '', thema: str = '') -> str:
+    ki_aktiv = bool(os.environ.get('ANTHROPIC_API_KEY'))
+    aktiv = '' if ki_aktiv else ' disabled'
+    ergebnis = ''
+    if draft:
+        ergebnis = (
+            '<label style="margin-top:12px;display:block;font-size:13px;color:#5b6672;font-weight:600">'
+            'Entwurf (bearbeiten, dann kopieren)</label>'
+            f'<textarea id="lidraft" rows="12" style="width:100%">{_esc(draft)}</textarea>'
+            '<div class="row"><button class="btn ghost" type="button" onclick="'
+            "var t=document.getElementById('lidraft');t.select();document.execCommand('copy');"
+            'this.textContent=\'Kopiert &#10003;\'">Kopieren</button></div>')
+    return (
+        '<details class="klapp statusbox" style="margin-top:18px"' + (' open' if draft else '') + '>'
+        '<summary style="cursor:pointer;font-weight:600;list-style:none">LinkedIn-Beitrag entwerfen</summary>'
+        '<div style="margin-top:10px">'
+        '<p class="hint" style="margin-top:0">Aufhänger/Kerngedanke aus dem Überblick oben (oder eigenes '
+        'Thema). Claude formuliert einen fertigen Beitrag in deinem Ton &ndash; du bearbeitest und gibst '
+        'ihn frei.</p>'
+        '<form method="post" action="/linkedin">'
+        '<textarea name="thema" rows="3" style="width:100%" '
+        f'placeholder="z.B. PPWR ab 12.8. aus Lieferantensicht: wer trägt bei Dropshipping die Erzeugerpflicht?">{_esc(thema)}</textarea>'
+        '<label style="display:flex;gap:8px;align-items:center;margin:8px 0;font-size:13px">'
+        '<input type="checkbox" name="kontext" value="1" checked style="width:16px;height:16px;min-width:0"> '
+        'Aktuellen Überblick als Faktengrundlage nutzen</label>'
+        f'<div class="row"><button class="btn" type="submit"{aktiv}>Entwurf erstellen</button></div>'
+        '</form>' + ergebnis + '</div></details>')
+
+
 def _startseite_html():
     st = _status()
     briefings = _lade(BRIEF_PATH, []) or []
@@ -347,7 +406,7 @@ def _startseite_html():
     else:
         feed = ''
 
-    return kopf + feed
+    return kopf + _linkedin_card() + feed
 
 
 def _esc(s):
@@ -365,6 +424,28 @@ def erstellen(request: Request):
     if not _lock.locked():
         threading.Thread(target=_run_generation, args=('manuell',), daemon=True).start()
     return RedirectResponse('/', status_code=303)
+
+
+@app.post('/linkedin', response_class=HTMLResponse)
+async def linkedin(request: Request):
+    form = await request.form()
+    thema = (form.get('thema') or '').strip()
+    kontext = form.get('kontext') == '1'
+    draft = ''
+    if thema:
+        md = ''
+        if kontext:
+            bs = _lade(BRIEF_PATH, []) or []
+            if bs:
+                md = bs[0].get('md') or ''
+        try:
+            draft = await run_in_threadpool(_erzeuge_linkedin, thema, md)
+        except Exception as e:  # noqa: BLE001
+            draft = 'Fehler bei der Erstellung: ' + str(e)[:300]
+    inhalt = (_platte('LinkedIn-Beitrag entwerfen')
+              + '<p style="margin-top:12px"><a href="/">&larr; Zur Übersicht</a></p>'
+              + _linkedin_card(draft, thema))
+    return HTMLResponse(_seite(inhalt, request.state.user))
 
 
 @app.get('/b/{bid}', response_class=HTMLResponse)
