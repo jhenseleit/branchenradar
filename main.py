@@ -149,13 +149,11 @@ Für jeden Vorschlag brauchst du:
 - warum: warum das jetzt relevant ist (mit belegter Zahl, wenn vorhanden)
 - accounts: bei welchen konkreten Absendern oder Account-Typen ein solcher Beitrag wahrscheinlich läuft (z. B. „die möbelindustrie", „bevh", „IFH Köln", „EHI", Logistik-Fachmedien, Marktplätze) — keine Coaches/Vertriebstrainer/Agenturen
 - quelle: eine URL zur zugrundeliegenden Nachricht (falls vorhanden, sonst leerer String)
-- beitrag: die direkte URL zu einem konkreten, passenden LinkedIn-Beitrag, unter den der Kommentar gesetzt werden könnte — NUR wenn du über die Web-Suche einen echten, existierenden LinkedIn-Post gefunden hast (linkedin.com/posts/... oder linkedin.com/feed/update/...). Erfinde niemals eine URL. Wenn du keinen konkreten Beitrag sicher gefunden hast, gib einen leeren String zurück.
-- account_name: der Name des LinkedIn-Accounts (Person oder Unternehmensseite), von dem dieser Beitrag stammt — der Absender, auf dessen Seite Jörn den Beitrag findet und kommentiert. Wenn kein konkreter Beitrag/Absender gefunden wurde, leerer String.
-- account_link: die URL zur LinkedIn-Seite dieses Absender-Accounts (linkedin.com/in/... für Personen oder linkedin.com/company/... für Unternehmen) — NUR wenn du sie über die Web-Suche wirklich gefunden hast, sonst leerer String. Niemals erfinden.
-- suchbegriffe: 2 bis 4 kurze Schlagworte (durch Leerzeichen getrennt), mit denen Jörn den passenden Beitrag auf LinkedIn finden kann (z. B. „Verpackungsgesetz Möbelversand" oder „bevh E-Commerce Zahlen") — keine ganzen Sätze
+- account_name: der Name eines konkreten LinkedIn-Accounts (Person oder Unternehmensseite), von dem so ein Beitrag typischerweise stammt oder den du konkret gefunden hast — der Absender, bei dem Jörn den Beitrag findet und kommentiert (z. B. „bevh", „IFH Köln", „EHI Retail Institute", ein Fachjournalist). Nenne einen tatsächlich existierenden Namen; wenn du keinen sicher benennen kannst, leerer String. Gib KEINE URL an — Jörn findet den Account über die Suche.
+- suchbegriffe: EIN oder ZWEI breite Kernbegriffe (kein ganzer Satz, keine lange Wortkette), mit denen die LinkedIn-Beitragssuche zuverlässig aktuelle Beiträge liefert — z. B. „Möbelhandel", „Verpackungsgesetz", „Retouren E-Commerce", „Paketzustellung". Lieber bewusst breit als zu spezifisch, sonst kommen keine Treffer.
 - entwurf: ein fertiger, kurzer LinkedIn-Kommentar (2 bis 4 Sätze) aus Lieferantensicht, den er direkt unter einen passenden Beitrag setzen kann
 
-Gib AUSSCHLIESSLICH ein JSON-Array zurück, 2 bis 4 Objekte, jedes mit genau den Feldern thema, warum, accounts, quelle, beitrag, account_name, account_link, suchbegriffe, entwurf. Kein weiterer Text, keine Vorrede, kein Markdown-Codeblock."""
+Gib AUSSCHLIESSLICH ein JSON-Array zurück, 2 bis 4 Objekte, jedes mit genau den Feldern thema, warum, accounts, quelle, account_name, suchbegriffe, entwurf. Kein weiterer Text, keine Vorrede, kein Markdown-Codeblock."""
 
 
 def _erzeuge_kommentare():
@@ -191,9 +189,7 @@ def _erzeuge_kommentare():
                 'warum': str(o.get('warum') or '').strip(),
                 'accounts': str(o.get('accounts') or '').strip(),
                 'quelle': str(o.get('quelle') or '').strip(),
-                'beitrag': str(o.get('beitrag') or '').strip(),
                 'account_name': str(o.get('account_name') or '').strip(),
-                'account_link': str(o.get('account_link') or '').strip(),
                 'suchbegriffe': str(o.get('suchbegriffe') or '').strip(),
                 'entwurf': str(o.get('entwurf') or '').strip(),
             })
@@ -649,30 +645,23 @@ def _kommentare_html():
                  'Quelle &#8599;</a>')
         acc = (f'<div class="hint" style="margin-top:4px"><b>Passende Accounts:</b> '
                f'{_esc(it["accounts"])}</div>' if it.get('accounts') else '')
-        # Absender-Account des Beitrags (falls konkret gefunden)
+        # Absender-Account (Name) – der Link entsteht als zuverlässige LinkedIn-Suche,
+        # NICHT als geratene Profil-URL (die führen oft auf tote Seiten).
         acc_name = it.get('account_name', '')
         acc_info = (f'<div class="hint" style="margin-top:4px"><b>Beitrag von:</b> {_esc(acc_name)}</div>'
                     if acc_name else '')
-        # LinkedIn-Zugang: Account + direkter Beitrag (nur wenn echt gefunden) + immer eine Suche
         li_links = ''
-        acc_link = it.get('account_link', '')
-        if acc_link.startswith('http') and 'linkedin.' in acc_link:
-            li_links += (f'<a class="btn ghost" href="{_esc(acc_link)}" target="_blank" rel="noopener" '
-                         'style="text-decoration:none">Zum Account &#8599;</a>')
-        elif acc_name:
+        if acc_name:
             aurl = 'https://www.linkedin.com/search/results/all/?keywords=' + quote_plus(acc_name)
             li_links += (f'<a class="btn ghost" href="{_esc(aurl)}" target="_blank" rel="noopener" '
-                         'style="text-decoration:none">Account suchen &#8599;</a>')
-        beitrag = it.get('beitrag', '')
-        if beitrag.startswith('http') and 'linkedin.' in beitrag:
-            li_links += (f'<a class="btn ghost" href="{_esc(beitrag)}" target="_blank" rel="noopener" '
-                         'style="text-decoration:none">Zum Beitrag &#8599;</a>')
-        such = it.get('suchbegriffe') or it.get('thema') or it.get('accounts') or ''
+                         f'style="text-decoration:none">Account „{_esc(acc_name)}" öffnen &#8599;</a>')
+        # Breite Beitragssuche (zuverlässig) – bewusst wenige, breite Stichwörter
+        such = it.get('suchbegriffe') or acc_name or it.get('accounts') or ''
         if such:
             url = ('https://www.linkedin.com/search/results/content/?keywords='
                    + quote_plus(such) + '&sortBy=%22date_posted%22')
             li_links += (f'<a class="btn ghost" href="{_esc(url)}" target="_blank" rel="noopener" '
-                         'style="text-decoration:none">Auf LinkedIn suchen &#8599;</a>')
+                         'style="text-decoration:none">Passende Beiträge suchen &#8599;</a>')
         li_row = (f'<div class="row" style="margin-top:8px;gap:6px;flex-wrap:wrap">{li_links}</div>'
                   if li_links else '')
         karten += (
