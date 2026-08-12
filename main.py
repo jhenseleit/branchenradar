@@ -130,7 +130,7 @@ def _erzeuge_linkedin(thema: str, kontext_md: str = '') -> str:
     if kontext_md:
         user += ('\nFaktengrundlage (aktueller Branchenüberblick – nutze nur belegte Zahlen '
                  'mit Quelle, wenn sie zum Thema passen):\n\n' + kontext_md)
-    with client.messages.stream(model=MODELL, max_tokens=4000, system=LINKEDIN_SYS,
+    with client.messages.stream(model=MODELL, max_tokens=8000, system=LINKEDIN_SYS,
                                 messages=[{'role': 'user', 'content': user}]) as stream:
         resp = stream.get_final_message()
     return ''.join(getattr(b, 'text', '') for b in resp.content
@@ -167,7 +167,7 @@ def _erzeuge_kommentare():
     messages = [{'role': 'user', 'content': user}]
     resp = None
     for _ in range(MAX_PAUSE):
-        with client.messages.stream(model=MODELL, max_tokens=8000, system=KOMMENTAR_SYS,
+        with client.messages.stream(model=MODELL, max_tokens=16000, system=KOMMENTAR_SYS,
                                     tools=tools, messages=messages) as stream:
             resp = stream.get_final_message()
         if resp.stop_reason == 'pause_turn':
@@ -364,7 +364,7 @@ def _erzeuge_briefing() -> str:
     messages = [{'role': 'user', 'content': user}]
     resp = None
     for _ in range(MAX_PAUSE):
-        with client.messages.stream(model=MODELL, max_tokens=16000, system=system,
+        with client.messages.stream(model=MODELL, max_tokens=32000, system=system,
                                     tools=tools, messages=messages) as stream:
             resp = stream.get_final_message()
         if resp.stop_reason == 'pause_turn':
