@@ -17,7 +17,6 @@ import secrets
 import threading
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote_plus
 
 import markdown as _md
 from fastapi import FastAPI, Request
@@ -35,8 +34,6 @@ DATA_DIR = Path(os.environ.get('BR_DATA_DIR', '/data'))
 BRIEF_PATH = DATA_DIR / 'briefings.json'
 SPEC_PATH = DATA_DIR / 'spec.json'
 STATUS_PATH = DATA_DIR / 'status.json'
-KOMM_PATH = DATA_DIR / 'kommentare.json'
-KOMM_STATUS_PATH = DATA_DIR / 'kommentare_status.json'
 LI_PATH = DATA_DIR / 'linkedin_posts.json'
 AUDIT_DB = DATA_DIR / 'audit.db'
 
@@ -136,92 +133,6 @@ def _erzeuge_linkedin(thema: str, kontext_md: str = '') -> str:
         resp = stream.get_final_message()
     return ''.join(getattr(b, 'text', '') for b in resp.content
                    if getattr(b, 'type', None) == 'text').strip()
-
-
-KOMMENTAR_SYS = """Du recherchierst mit dem Web-Such-Werkzeug die Nachrichtenlage der letzten ein bis zwei Tage zu Möbel, Einrichtung, Möbel-Onlinehandel, E-Commerce, Logistik/Zustellung und Regulatorik (Verpackung, Digitaler Produktpass, Verbraucherrecht). Küchenthemen ausschließen. Daraus schlägst du Jörn Henseleit 2 bis 4 LinkedIn-Kommentare vor, die er unter passenden Beiträgen abgeben könnte.
-
-Wer er ist: Vertriebsleiter bei der Skyport GmbH (B2B-Möbelgroßhandel, reiner Onliner: Dropshipping, 24-Stunden-Versand, über 1.300 Artikel; Kunden auch CH/NO/UK; verkauft daneben auch an Endkunden). Er kommentiert aus Lieferantensicht über Verlässlichkeit, Verfügbarkeit, Produktdatenqualität, Lieferzeit.
-
-Ton der Kommentar-Entwürfe: kein Berater-/Motivationssprech, keine Floskeln, keine Emojis, keine Hashtags, keine Dreierfiguren als Stilmittel, nicht werblich, unbequeme Befunde nicht abmildern. Ungleich lange Sätze, gesprochenes Register. Behaupte nie, Skyport verkaufe ausschließlich über Händler. Kein Lob auf den stationären Handel als Konzept, aber auch nicht dagegen schießen. Wenn Zahlen genutzt werden, nur belegte mit knapper Quelle.
-
-Für jeden Vorschlag brauchst du:
-- thema: der Aufhänger in einem Satz
-- warum: warum das jetzt relevant ist (mit belegter Zahl, wenn vorhanden)
-- accounts: bei welchen konkreten Absendern oder Account-Typen ein solcher Beitrag wahrscheinlich läuft (z. B. „die möbelindustrie", „bevh", „IFH Köln", „EHI", Logistik-Fachmedien, Marktplätze) — keine Coaches/Vertriebstrainer/Agenturen
-- quelle: eine URL zur zugrundeliegenden Nachricht (falls vorhanden, sonst leerer String)
-- account_name: der Name eines konkreten LinkedIn-Accounts (Person oder Unternehmensseite), von dem so ein Beitrag typischerweise stammt oder den du konkret gefunden hast — der Absender, bei dem Jörn den Beitrag findet und kommentiert (z. B. „bevh", „IFH Köln", „EHI Retail Institute", ein Fachjournalist). Nenne einen tatsächlich existierenden Namen; wenn du keinen sicher benennen kannst, leerer String. Gib KEINE URL an — Jörn findet den Account über die Suche.
-- suchbegriffe: EIN oder ZWEI breite Kernbegriffe (kein ganzer Satz, keine lange Wortkette), mit denen die LinkedIn-Beitragssuche zuverlässig aktuelle Beiträge liefert — z. B. „Möbelhandel", „Verpackungsgesetz", „Retouren E-Commerce", „Paketzustellung". Lieber bewusst breit als zu spezifisch, sonst kommen keine Treffer.
-- entwurf: ein fertiger, kurzer LinkedIn-Kommentar (2 bis 4 Sätze) aus Lieferantensicht, den er direkt unter einen passenden Beitrag setzen kann
-
-Gib AUSSCHLIESSLICH ein JSON-Array zurück, 2 bis 4 Objekte, jedes mit genau den Feldern thema, warum, accounts, quelle, account_name, suchbegriffe, entwurf. Kein weiterer Text, keine Vorrede, kein Markdown-Codeblock."""
-
-
-def _erzeuge_kommentare():
-    key = os.environ.get('ANTHROPIC_API_KEY')
-    if not key:
-        raise RuntimeError('ANTHROPIC_API_KEY ist nicht gesetzt.')
-    from anthropic import Anthropic
-    client = Anthropic(api_key=key)
-    heute = datetime.now().strftime('%d.%m.%Y')
-    user = (f'Heutiges Datum: {heute}. Recherchiere die aktuelle Nachrichtenlage der letzten '
-            'ein bis zwei Tage und schlage 2 bis 4 LinkedIn-Kommentare vor. Gib nur das '
-            'JSON-Array zurück.')
-    tools = [{'type': 'web_search_20260209', 'name': 'web_search', 'max_uses': 15}]
-    messages = [{'role': 'user', 'content': user}]
-    resp = None
-    for _ in range(MAX_PAUSE):
-        with client.messages.stream(model=MODELL, max_tokens=16000, system=KOMMENTAR_SYS,
-                                    tools=tools, messages=messages) as stream:
-            resp = stream.get_final_message()
-        if resp.stop_reason == 'pause_turn':
-            messages.append({'role': 'assistant', 'content': resp.content})
-            continue
-        break
-    text = ''.join(getattr(b, 'text', '') for b in (resp.content if resp else [])
-                   if getattr(b, 'type', None) == 'text')
-    m = re.search(r'\[.*\]', text, re.S)
-    arr = json.loads(m.group(0)) if m else []
-    out = []
-    for o in arr[:4]:
-        if isinstance(o, dict) and (o.get('entwurf') or o.get('thema')):
-            out.append({
-                'thema': str(o.get('thema') or '').strip(),
-                'warum': str(o.get('warum') or '').strip(),
-                'accounts': str(o.get('accounts') or '').strip(),
-                'quelle': str(o.get('quelle') or '').strip(),
-                'account_name': str(o.get('account_name') or '').strip(),
-                'suchbegriffe': str(o.get('suchbegriffe') or '').strip(),
-                'entwurf': str(o.get('entwurf') or '').strip(),
-            })
-    if not out:
-        raise RuntimeError('Keine verwertbaren Vorschläge erhalten.')
-    return out
-
-
-def _speichere_kommentare(items):
-    jetzt = datetime.now()
-    _sichere(KOMM_PATH, {'ts': jetzt.isoformat(timespec='seconds'),
-                         'datum': jetzt.strftime('%d.%m.%Y'), 'items': items})
-
-
-_komm_lock = threading.Lock()
-
-
-def _run_kommentare(quelle='manuell'):
-    if not _komm_lock.acquire(blocking=False):
-        return
-    try:
-        _sichere(KOMM_STATUS_PATH, {'status': 'laeuft', 'quelle': quelle,
-                                    'seit': datetime.now().isoformat(timespec='seconds')})
-        items = _erzeuge_kommentare()
-        _speichere_kommentare(items)
-        _sichere(KOMM_STATUS_PATH, {'status': 'fertig',
-                                    'zeit': datetime.now().isoformat(timespec='seconds')})
-    except Exception as e:  # noqa: BLE001
-        _sichere(KOMM_STATUS_PATH, {'status': 'fehler', 'meldung': str(e)[:400],
-                                    'zeit': datetime.now().isoformat(timespec='seconds')})
-    finally:
-        _komm_lock.release()
 
 
 # ── Zugang (nur admin) ───────────────────────────────────────────────────────
@@ -345,7 +256,6 @@ def _subtabs(active: str) -> str:
     return ('<div class="subtabs">'
             + a('ueberblick', 'Wochenüberblick', '/')
             + a('linkedin', 'LinkedIn-Beiträge', '/linkedin')
-            + a('kommentare', 'LinkedIn-Kommentare', '/kommentare')
             + '</div>')
 
 
@@ -420,10 +330,6 @@ try:
     _sched = BackgroundScheduler(timezone='Europe/Berlin')
     _sched.add_job(lambda: _run_generation('automatik'), 'cron',
                    day_of_week='mon', hour=7, minute=0, id='montag',
-                   misfire_grace_time=3600, coalesce=True)
-    # LinkedIn-Kommentar-Vorschläge an Werktagen früh einspielen
-    _sched.add_job(lambda: _run_kommentare('automatik'), 'cron',
-                   day_of_week='mon-fri', hour=7, minute=30, id='kommentare',
                    misfire_grace_time=3600, coalesce=True)
     _sched.start()
 except Exception:  # noqa: BLE001 - Automatik ist optional
@@ -600,104 +506,6 @@ def erstellen(request: Request):
     if not _lock.locked():
         threading.Thread(target=_run_generation, args=('manuell',), daemon=True).start()
     return RedirectResponse('/', status_code=303)
-
-
-def _kommentare_html():
-    ki_aktiv = bool(os.environ.get('ANTHROPIC_API_KEY'))
-    st = _lade(KOMM_STATUS_PATH, {}) or {}
-    daten = _lade(KOMM_PATH, {}) or {}
-    items = daten.get('items') or []
-    laeuft = st.get('status') == 'laeuft'
-
-    kopf = (_platte('Täglich frische LinkedIn-Kommentare aus der Nachrichtenlage &ndash; '
-                    'du entscheidest, welchen du nimmst. Ich poste nichts.')
-            + _subtabs('kommentare'))
-
-    if laeuft:
-        seit = (st.get('seit') or '').replace('T', ' ')[:16]
-        banner = ('<div class="statusbox laeuft"><b>Vorschläge werden erstellt&hellip;</b>'
-                  f'<div class="hint" style="margin-top:4px">Gestartet {seit} &middot; '
-                  'Claude prüft die Nachrichtenlage (dauert 1&ndash;2 Minuten). Seite lädt sich neu.</div></div>'
-                  '<script>setTimeout(function(){location.reload()},10000)</script>')
-        btn = '<button class="btn" disabled>Wird erstellt&hellip;</button>'
-    else:
-        if st.get('status') == 'fehler':
-            banner = ('<div class="statusbox"><span class="badge err">Letzter Lauf fehlgeschlagen</span>'
-                      f'<div class="hint" style="margin-top:6px">{_esc(st.get("meldung") or "")}</div></div>')
-        elif daten.get('datum'):
-            banner = (f'<div class="statusbox"><span class="badge ok">&#10003; Stand '
-                      f'{_esc(daten.get("datum"))}</span></div>')
-        else:
-            banner = '<div class="statusbox"><span class="hint">Noch keine Vorschläge erstellt.</span></div>'
-        aktiv = '' if ki_aktiv else ' disabled'
-        btn = (f'<form method="post" action="/kommentare/erstellen" style="display:inline">'
-               f'<button class="btn" type="submit"{aktiv}>Jetzt neu vorschlagen</button></form>')
-
-    kistat = ('' if ki_aktiv else
-              '<div class="row" style="margin-top:2px"><span class="badge warn">Kein '
-              '<code>ANTHROPIC_API_KEY</code> &ndash; Vorschläge nicht möglich</span></div>')
-
-    karten = ''
-    for i, it in enumerate(items, 1):
-        q = ''
-        if it.get('quelle', '').startswith('http'):
-            q = (f' &middot; <a href="{_esc(it["quelle"])}" target="_blank" rel="noopener">'
-                 'Quelle &#8599;</a>')
-        acc = (f'<div class="hint" style="margin-top:4px"><b>Passende Accounts:</b> '
-               f'{_esc(it["accounts"])}</div>' if it.get('accounts') else '')
-        # Absender-Account (Name) – der Link entsteht als zuverlässige LinkedIn-Suche,
-        # NICHT als geratene Profil-URL (die führen oft auf tote Seiten).
-        acc_name = it.get('account_name', '')
-        acc_info = (f'<div class="hint" style="margin-top:4px"><b>Beitrag von:</b> {_esc(acc_name)}</div>'
-                    if acc_name else '')
-        li_links = ''
-        if acc_name:
-            aurl = 'https://www.linkedin.com/search/results/all/?keywords=' + quote_plus(acc_name)
-            li_links += (f'<a class="btn ghost" href="{_esc(aurl)}" target="_blank" rel="noopener" '
-                         f'style="text-decoration:none">Account „{_esc(acc_name)}" öffnen &#8599;</a>')
-        # Breite Beitragssuche (zuverlässig) – bewusst wenige, breite Stichwörter
-        such = it.get('suchbegriffe') or acc_name or it.get('accounts') or ''
-        if such:
-            url = ('https://www.linkedin.com/search/results/content/?keywords='
-                   + quote_plus(such) + '&sortBy=%22date_posted%22')
-            li_links += (f'<a class="btn ghost" href="{_esc(url)}" target="_blank" rel="noopener" '
-                         'style="text-decoration:none">Passende Beiträge suchen &#8599;</a>')
-        li_row = (f'<div class="row" style="margin-top:8px;gap:6px;flex-wrap:wrap">{li_links}</div>'
-                  if li_links else '')
-        karten += (
-            '<div class="statusbox" style="margin-top:14px">'
-            f'<div style="font-weight:600">{i}. {_esc(it["thema"])}</div>'
-            f'<div class="hint" style="margin-top:4px">{_esc(it["warum"])}{q}</div>'
-            f'{acc_info}'
-            f'{acc}'
-            f'{li_row}'
-            f'<textarea id="k{i}" rows="5" style="width:100%;margin-top:8px">{_esc(it["entwurf"])}</textarea>'
-            '<div class="row"><button class="btn ghost" type="button" onclick="'
-            f"var t=document.getElementById('k{i}');t.select();document.execCommand('copy');"
-            'this.textContent=\'Kopiert &#10003;\'">Kommentar kopieren</button></div>'
-            '</div>')
-    if not items and not laeuft:
-        karten = ('<div class="statusbox" style="margin-top:14px"><p class="hint" style="margin:0">'
-                  'Noch keine Vorschläge. „Jetzt neu vorschlagen" klicken &ndash; ab Werktag 07:30 '
-                  'kommen sie automatisch.</p></div>')
-
-    return (kopf + kistat + banner
-            + f'<div class="row" style="margin-top:14px">{btn} '
-            '<span class="hint" style="align-self:center">Automatik: Mo&ndash;Fr 07:30 Uhr. '
-            'Kopierten Entwurf setzt du selbst unter den passenden Beitrag.</span></div>'
-            + karten)
-
-
-@app.get('/kommentare', response_class=HTMLResponse)
-def kommentare(request: Request):
-    return HTMLResponse(_seite(_kommentare_html(), request.state.user))
-
-
-@app.post('/kommentare/erstellen')
-def kommentare_erstellen(request: Request):
-    if not _komm_lock.locked():
-        threading.Thread(target=_run_kommentare, args=('manuell',), daemon=True).start()
-    return RedirectResponse('/kommentare', status_code=303)
 
 
 @app.get('/linkedin', response_class=HTMLResponse)
