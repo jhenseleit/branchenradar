@@ -50,6 +50,10 @@ MODELL = os.environ.get('BRANCHENRADAR_MODELL', 'claude-opus-5')
 # Nano Banana = Googles Gemini Bildmodell (eigener GEMINI_API_KEY, eigene Abrechnung)
 GEMINI_BILD_MODELL = os.environ.get('GEMINI_BILD_MODELL', 'gemini-2.5-flash-image')
 GEMINI_BILD_FORMAT = os.environ.get('GEMINI_BILD_FORMAT', '4:5')  # Instagram-Hochformat
+# Standort fürs Live-Wetter (Outfit passend zum Tag). Default: Oberpfalz (Ebermannsdorf/Kümmersbruck).
+WETTER_LAT = os.environ.get('WETTER_LAT', '49.38')
+WETTER_LON = os.environ.get('WETTER_LON', '11.93')
+WETTER_ORT = os.environ.get('WETTER_ORT', 'Oberpfalz')
 MAX_PAUSE = 14  # Fortsetzungen für pause_turn (Web-Such-Schleife)
 
 app = FastAPI(title=APP_NAME, docs_url=None, redoc_url=None)
@@ -243,6 +247,10 @@ BILDPROMPT_DEFAULT = (
     'Team – nah dran, mit Bewegung und Blick fürs Detail.\n'
     'Regeln:\n'
     '- Wahre Gesicht und Identität der Referenzperson genau.\n'
+    '- Kleidung: Business Casual, KEIN klassisches Hemd und kein Anzug. Variiere das Outfit von Bild zu '
+    'Bild (z. B. T-Shirt, Pullover oder Sweatshirt, Jeans oder Chino, je nach Wetter eine Übergangs- oder '
+    'Winterjacke) und wähle es passend zu Jahreszeit und Wetter aus dem oben genannten Wetter-Kontext, '
+    'damit das Bild aktuell und „von heute" wirkt.\n'
     '- Beschreibe konkret: die Handlung/Szene und den Moment, Bildausschnitt und Perspektive (gern nah, '
     'aus der Szene heraus, auch mal leicht schräg), Licht und Stimmung (natürlich, kraftvoll, mit Tiefe/'
     'Gegenlicht), fotorealistisch und glaubwürdig – lebendig statt steifer Studio-/Standard-Business-Look.\n'
@@ -297,6 +305,55 @@ def _split_kanaele(text: str):
     return li, nl.strip(), ig.strip()
 
 
+def _jahreszeit(monat: int) -> str:
+    return {12: 'Winter', 1: 'Winter', 2: 'Winter', 3: 'Frühling', 4: 'Frühling', 5: 'Frühling',
+            6: 'Sommer', 7: 'Sommer', 8: 'Sommer', 9: 'Herbst', 10: 'Herbst', 11: 'Herbst'}.get(monat, '')
+
+
+def _wettercode(code) -> str:
+    try:
+        code = int(code)
+    except (TypeError, ValueError):
+        return 'wechselhaft'
+    if code == 0:
+        return 'klar/sonnig'
+    if code in (1, 2):
+        return 'leicht bewölkt'
+    if code == 3:
+        return 'bedeckt'
+    if code in (45, 48):
+        return 'neblig'
+    if code in (51, 53, 55, 56, 57):
+        return 'Nieselregen'
+    if code in (61, 63, 65, 66, 67):
+        return 'Regen'
+    if code in (71, 73, 75, 77, 85, 86):
+        return 'Schnee'
+    if code in (80, 81, 82):
+        return 'Regenschauer'
+    if code in (95, 96, 99):
+        return 'Gewitter'
+    return 'wechselhaft'
+
+
+def _wetter_kontext() -> str:
+    """Kurzer Wetter-/Jahreszeit-Kontext für heute (Live über Open-Meteo, Fallback = Jahreszeit)."""
+    now = datetime.now()
+    ctx = f'Heutiges Datum: {now.strftime("%d.%m.%Y")}. Jahreszeit: {_jahreszeit(now.month)}. Region: {WETTER_ORT}'
+    try:
+        import urllib.request
+        url = (f'https://api.open-meteo.com/v1/forecast?latitude={WETTER_LAT}&longitude={WETTER_LON}'
+               '&current=temperature_2m,weather_code')
+        with urllib.request.urlopen(url, timeout=6) as r:  # noqa: S310 (öffentliche Wetter-API)
+            cur = json.loads(r.read().decode('utf-8')).get('current', {})
+        temp = cur.get('temperature_2m')
+        if temp is not None:
+            ctx += f', aktuell rund {round(float(temp))} °C, {_wettercode(cur.get("weather_code"))}'
+    except Exception:  # noqa: BLE001 - ohne Live-Wetter bleibt die Jahreszeit
+        pass
+    return ctx + '. Wähle Kleidung passend dazu.'
+
+
 def _content_pipeline(thema: str, kontext_md: str = '') -> dict:
     """Drei verkettete Agenten: Kurator -> Texter -> Prüfer. Reine Text-Ausgaben."""
     p = _content_prompts()
@@ -314,6 +371,7 @@ def _content_pipeline(thema: str, kontext_md: str = '') -> dict:
                      f'Faktengrundlage:\n\n{fakt}\n\nLinkedIn-Post:\n{linkedin}\n\n'
                      f'LinkedIn-Newsletter:\n{newsletter}\n\nInstagram-Entwurf:\n{instagram}', 2200)
     bildprompt = _ki_text(_mit_profil(p['bildprompt']),
+                          f'Wetter-Kontext (für ein aktuelles, wetterpassendes Outfit):\n{_wetter_kontext()}\n\n'
                           f'Thema/Briefing:\n\n{brief}\n\nInstagram-Fassung:\n{instagram}', 800)
     return {'brief': brief, 'linkedin': linkedin, 'newsletter': newsletter, 'instagram': instagram,
             'pruef': pruef, 'bildprompt': bildprompt}
