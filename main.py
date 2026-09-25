@@ -247,6 +247,10 @@ BILDPROMPT_DEFAULT = (
     'präsent und meist der Kamera zugewandt. KEIN düsterer, körniger oder dokumentarischer Look, KEINE '
     'Bewegungsunschärfe, kein Staub. Wahre Gesicht und Identität genau (gepflegter kurzer Bart, klare '
     'runde Brille, gepflegtes Erscheinungsbild).\n\n'
+    'WICHTIG – Themenbezug: Die Szene MUSS den Kern des Themas/Beitrags sichtbar aufgreifen (durch '
+    'Handlung, Umgebung oder passende Requisiten, die zum konkreten Beitrag passen) und darf NIE ein '
+    'beliebiges, themenfremdes Porträt oder ein halb leeres Bild sein. Das Bild soll sowohl im LinkedIn- '
+    'als auch im Instagram-Feed funktionieren.\n\n'
     'Bestimme ZUERST aus Thema/Beitrag, ob es BERUFLICH oder PRIVAT/GESELLSCHAFTLICH ist, und wähle '
     'Umgebung UND Outfit entsprechend:\n'
     '• BERUFLICH (Skyport, Lieferant, Handel, Logistik, Branche): helles modernes Büro oder helle, '
@@ -523,8 +527,10 @@ def _erzeuge_bild(prompt: str, ref_paths, stil_paths=None):
             contents.append(teil)
     stil_teile = [t for t in (_teil(sp) for sp in (stil_paths or [])) if t is not None]
     if stil_teile:
-        contents.append('Die folgenden Bilder dienen NUR als Vorlage für Look, Bildstil, Licht, Farben '
-                        'und Bildaufbau – übernimm diesen Stil, aber NICHT eine fremde Identität:')
+        contents.append('Die folgenden Bilder dienen NUR als Vorlage für Look, Bildstil, Licht und Farben '
+                        '– übernimm diesen Stil, aber NICHT eine fremde Identität und NICHT leere '
+                        'Textflächen oder das Layout 1:1. Person und thementypische Szene stehen im '
+                        'Mittelpunkt; das Bild darf nicht halb leer sein:')
         contents.extend(stil_teile)
 
     def _call(mit_format: bool):
@@ -593,7 +599,7 @@ def _wasserzeichen(daten: bytes, text: str = 'AI-generated') -> bytes:
     img = Image.open(io.BytesIO(daten)).convert('RGB')
     draw = ImageDraw.Draw(img, 'RGBA')
     w, h = img.size
-    size = max(16, w // 30)
+    size = max(10, w // 58)          # klein und dezent (kleiner als zuvor)
     font = _font(size)
     try:
         bbox = draw.textbbox((0, 0), text, font=font)
@@ -601,12 +607,12 @@ def _wasserzeichen(daten: bytes, text: str = 'AI-generated') -> bytes:
     except AttributeError:  # sehr alte Pillow
         tw, th = draw.textsize(text, font=font)
         offx = offy = 0
-    pad = max(6, size // 3)
-    rand = max(10, w // 60)
+    pad = max(3, size // 4)
+    rand = max(7, w // 90)
     box_w, box_h = tw + pad * 2, th + pad * 2
     bx, by = w - box_w - rand, h - box_h - rand
-    draw.rectangle([bx, by, bx + box_w, by + box_h], fill=(0, 0, 0, 150))
-    draw.text((bx + pad - offx, by + pad - offy), text, font=font, fill=(255, 255, 255, 240))
+    draw.rectangle([bx, by, bx + box_w, by + box_h], fill=(0, 0, 0, 105))
+    draw.text((bx + pad - offx, by + pad - offy), text, font=font, fill=(255, 255, 255, 225))
     out = io.BytesIO()
     img.save(out, format='PNG')
     return out.getvalue()
