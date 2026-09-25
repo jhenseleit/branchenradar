@@ -249,6 +249,12 @@ BILDPROMPT_DEFAULT = (
     'sein statt nur starr in die Kamera zu blicken. KEIN düsterer, körniger oder dokumentarischer Look. '
     'Wahre Gesicht und Identität genau (gepflegter kurzer Bart, klare runde Brille, gepflegtes '
     'Erscheinungsbild).\n\n'
+    'WICHTIG – Stimmung: Das Bild soll WARM, EINLADEND und PERSÖNLICH wirken, mit „Gemütlichkeit" und '
+    'echter Ausstrahlung – NICHT kühl, glatt, steril oder wie ein Corporate-Stockfoto. Nutze warmes, '
+    'weiches Licht (goldene, warme Töne; kein hartes, klinisch-kaltes Studiolicht), eine lebendige, '
+    'gelebte Umgebung mit persönlichen, warmen Details (Holz, Pflanzen, weiche Materialien, eine '
+    'Kaffeetasse, kleine persönliche Gegenstände) statt leerer, glatter Flächen. Ein echter, warmer, '
+    'nahbarer Moment mit Persönlichkeit.\n\n'
     'WICHTIG – Themenbezug: Die Szene MUSS den Kern des Themas/Beitrags sichtbar aufgreifen (durch '
     'Handlung, Umgebung oder passende Requisiten, die zum konkreten Beitrag passen) und darf NIE ein '
     'beliebiges, themenfremdes Porträt oder ein halb leeres Bild sein. Das Bild soll sowohl im LinkedIn- '
@@ -520,11 +526,13 @@ def _erzeuge_bild(prompt: str, ref_paths, stil_paths=None):
         mime = 'image/png' if str(pfad).lower().endswith('.png') else 'image/jpeg'
         return types.Part.from_bytes(data=daten, mime_type=mime)
 
-    voll = ('Erstelle ein hochwertiges, professionelles Marken-/Editorial-Foto im Hochformat für einen '
-            'LinkedIn-/Instagram-Post – klar, hell und vorteilhaft beleuchtet, gestochen scharf, gepflegt; '
-            'kein düsterer, körniger oder unruhiger Look. Die abgebildete Person ist die Referenzperson '
-            'aus den ersten beigefügten Fotos – wahre ihr Gesicht und ihre Identität möglichst genau, '
-            'gepflegtes Erscheinungsbild. Kein Text im Bild, keine Logos. Motiv: ' + (prompt or '').strip())
+    voll = ('Erstelle ein hochwertiges, professionelles Foto im Hochformat für einen LinkedIn-/Instagram-'
+            'Post – gepflegt und scharf, aber vor allem WARM, EINLADEND und PERSÖNLICH: warmes, weiches '
+            'Licht (goldene Töne) und eine gemütliche, lebendige Atmosphäre mit echter Ausstrahlung, kein '
+            'kühler, klinisch-steriler oder glatter Corporate-Stockfoto-Look. Die abgebildete Person ist '
+            'die Referenzperson aus den ersten beigefügten Fotos – wahre ihr Gesicht und ihre Identität '
+            'möglichst genau, gepflegtes Erscheinungsbild. Kein Text im Bild, keine Logos. Motiv: '
+            + (prompt or '').strip())
     contents = [voll]
     for rp in ref_paths:
         teil = _teil(rp)
