@@ -239,24 +239,28 @@ PRUEFER_DEFAULT = (
     '„Empfehlung: …" (freigeben / überarbeiten).')
 
 BILDPROMPT_DEFAULT = (
-    'Du bist Bild-Prompt-Designer für die Instagram-Bilder der Person aus dem Profil oben.\n\n'
+    'Du bist Bild-Prompt-Designer für die LinkedIn-/Instagram-Bilder der Person aus dem Profil oben.\n\n'
     'Aus dem Beitrag baust du EINEN fertigen Bild-Prompt für Googles Bildmodell (Nano Banana / Gemini).\n'
-    'Stil: erzählerisch und dynamisch – die Referenzperson (Jörn) MITTEN in einer echten Handlung zum '
-    'Thema, ein eingefangener Moment, nicht gestellt und nicht statisch. Zum Beispiel: prüft/packt Ware '
-    'im Möbellager, geht zwischen Palettenreihen, am Packtisch, im Versandbereich, im Gespräch mit dem '
-    'Team – nah dran, mit Bewegung und Blick fürs Detail.\n'
+    'Zielbild: ein hochwertiges, professionelles Marken-/Editorial-Foto der Referenzperson (Jörn) – '
+    'souverän, sympathisch und gepflegt, in ihrer echten Arbeitswelt (helles modernes Büro oder helle, '
+    'aufgeräumte Logistik-/Möbelhalle). Umgebungs-Porträt: die Person präsent und meist der Kamera '
+    'zugewandt (ruhiger, selbstbewusster Blick), gern mit leichtem Themenbezug (z. B. an einem Stehpult, '
+    'am Packtisch, vor Regalreihen, am Verladetor) – aber immer klar, hell und einladend. KEINE düstere, '
+    'körnige oder dokumentarische Reportage, KEINE Bewegungsunschärfe, kein Staub, kein „schmutziges '
+    'Lager".\n'
     'Regeln:\n'
-    '- Wahre Gesicht und Identität der Referenzperson genau.\n'
-    '- Kleidung: Business Casual, KEIN klassisches Hemd und kein Anzug. Variiere das Outfit von Bild zu '
-    'Bild (z. B. T-Shirt, Pullover oder Sweatshirt, Jeans oder Chino, je nach Wetter eine Übergangs- oder '
-    'Winterjacke) und wähle es passend zu Jahreszeit und Wetter aus dem oben genannten Wetter-Kontext, '
-    'damit das Bild aktuell und „von heute" wirkt.\n'
-    '- Beschreibe konkret: die Handlung/Szene und den Moment, Bildausschnitt und Perspektive (gern nah, '
-    'aus der Szene heraus, auch mal leicht schräg), Licht und Stimmung (natürlich, kraftvoll, mit Tiefe/'
-    'Gegenlicht), fotorealistisch und glaubwürdig – lebendig statt steifer Studio-/Standard-Business-Look.\n'
-    '- Instagram-Hochformat (4:5). KEIN Text im Bild, keine Logos, keine Schrift, keine Collage.\n'
-    '- Nutze nur, was zum Thema passt; erfinde keine Marken; nicht ins Werbliche kippen.\n'
-    'Gib AUSSCHLIESSLICH den fertigen Bild-Prompt als Fließtext zurück (2–4 Sätze) – keine Überschrift, '
+    '- Wahre Gesicht und Identität der Referenzperson genau; gepflegter kurzer Bart, klare runde Brille, '
+    'gepflegtes Erscheinungsbild.\n'
+    '- Outfit (Signature-Look): dunkelblaues Sakko ODER dunkelblaue Blouson-/Bomberjacke über einem '
+    'sauberen weißen Rundhals-T-Shirt, gut sitzend und ordentlich – KEIN klassisches Hemd. Passe die '
+    'Jacke an Wetter/Jahreszeit aus dem oben genannten Kontext an (warm: nur weißes T-Shirt oder leichtes '
+    'Sakko; kühler: Bomberjacke; kalt: zusätzlich ein Mantel), aber IMMER gepflegt und hochwertig.\n'
+    '- Licht: hell, weich und vorteilhaft (Tageslicht durch große Fenster), frische klare Farben, '
+    'gestochen scharf, sanft unscharfer Hintergrund, Premium-Markenfoto-Qualität.\n'
+    '- Komposition: Hochformat 4:5, die Person zu EINER Seite gesetzt, sodass auf der anderen Seite '
+    'genug ruhige, freie Fläche für eine spätere Textüberschrift bleibt.\n'
+    '- KEIN Text im Bild, keine Schrift, keine Logos, keine Collage; erfinde keine Marken.\n'
+    'Gib AUSSCHLIESSLICH den fertigen Bild-Prompt als Fließtext zurück (3–5 Sätze) – keine Überschrift, '
     'keine Erklärung, keine Varianten.')
 
 IDEEN_DEFAULT = (
@@ -487,11 +491,11 @@ def _erzeuge_bild(prompt: str, ref_paths):
     from google.genai import types
     client = genai.Client(api_key=key)
 
-    voll = ('Erstelle ein fotorealistisches Bild für einen Instagram-Post – ein erzählerischer, '
-            'dynamischer Moment mitten im Geschehen, kein gestelltes Standard-Business-Foto. '
-            'Die abgebildete Person ist die Referenzperson aus den beigefügten Fotos – wahre ihr Gesicht '
-            'und ihre Identität möglichst genau. Kein Text im Bild, keine Logos. Motiv: '
-            + (prompt or '').strip())
+    voll = ('Erstelle ein hochwertiges, professionelles Marken-/Editorial-Foto im Hochformat für einen '
+            'LinkedIn-/Instagram-Post – klar, hell und vorteilhaft beleuchtet, gestochen scharf, gepflegt; '
+            'kein düsterer, körniger oder unruhiger Look. Die abgebildete Person ist die Referenzperson '
+            'aus den beigefügten Fotos – wahre ihr Gesicht und ihre Identität möglichst genau, gepflegtes '
+            'Erscheinungsbild. Kein Text im Bild, keine Logos. Motiv: ' + (prompt or '').strip())
     contents = [voll]
     for rp in ref_paths:
         try:
