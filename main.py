@@ -462,6 +462,28 @@ def _erzeuge_bild(prompt: str, ref_paths):
     raise RuntimeError('Gemini hat kein Bild zurückgegeben (evtl. blockiert oder Nur-Text-Antwort).')
 
 
+def _gemini_selftest() -> str:
+    """Minimaler Gemini-Bildaufruf ohne Referenzfoto. -> 'OK' oder Fehlertext."""
+    key = os.environ.get('GEMINI_API_KEY')
+    if not key:
+        return 'GEMINI_API_KEY ist nicht gesetzt.'
+    try:
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=key)
+        resp = client.models.generate_content(
+            model=GEMINI_BILD_MODELL,
+            contents=['Ein einfaches, neutrales Testbild: eine schlichte hellgraue Fläche.'],
+            config=types.GenerateContentConfig(response_modalities=['IMAGE']))
+        for part in (getattr(resp, 'parts', None) or []):
+            inline = getattr(part, 'inline_data', None)
+            if inline is not None and getattr(inline, 'data', None):
+                return 'OK'
+        return 'Verbindung stand, aber kein Bild in der Antwort (evtl. Safety-Filter oder Nur-Text).'
+    except Exception as e:  # noqa: BLE001
+        return 'FEHLER: ' + str(e)[:400]
+
+
 def _bild_fuer_content(cid: str):
     """Erzeugt ein Bild für den gespeicherten Content-Eintrag, Ablage unter /data/bilder."""
     liste = _content_laden()
@@ -919,7 +941,9 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
            '<p class="hint" style="margin:0 0 8px">Noch keine Referenzfotos.</p>')
         + '<form method="post" action="/content/referenz" enctype="multipart/form-data" class="row">'
         '<input type="file" name="fotos" accept="image/*" multiple>'
-        '<button class="btn ghost" type="submit">Hochladen</button></form></div>')
+        '<button class="btn ghost" type="submit">Hochladen</button></form>'
+        '<form method="post" action="/content/gemini-test" style="margin-top:8px">'
+        '<button class="btn ghost" type="submit">Gemini-Verbindung testen</button></form></div>')
 
     posts = _content_laden()
     archiv = ''
@@ -1349,6 +1373,14 @@ def content_bild_datei(request: Request, name: str):
     if p.is_file():
         return FileResponse(str(p))
     return RedirectResponse('/content', status_code=303)
+
+
+@app.post('/content/gemini-test', response_class=HTMLResponse)
+async def content_gemini_test(request: Request):
+    msg = await run_in_threadpool(_gemini_selftest)
+    hinweis = ('✓ Gemini-Verbindung OK – Bilderzeugung funktioniert.' if msg == 'OK'
+               else 'Gemini-Test: ' + msg)
+    return HTMLResponse(_seite(_content_html(hinweis=hinweis), request.state.user))
 
 
 @app.post('/content/{cid}/bildprompt')
