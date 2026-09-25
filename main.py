@@ -1004,14 +1004,24 @@ def _themen_html(vorschlaege=None, fokus='', hinweis=''):
         for idee in vorschlaege:
             zeilen += (
                 '<div class="row" style="align-items:flex-start;gap:8px;border-bottom:1px solid var(--line);padding:8px 0">'
-                f'<div style="flex:1">{_esc(idee)}</div>'
-                '<form method="post" action="/themen/add" style="display:inline">'
-                f'<input type="hidden" name="titel" value="{_esc(idee)}">'
-                '<button class="btn ghost" type="submit">In Speicher</button></form>'
+                '<label style="display:flex;gap:8px;flex:1;align-items:flex-start;cursor:pointer">'
+                f'<input type="checkbox" name="titel" value="{_esc(idee)}" class="ideachk" '
+                'style="width:16px;height:16px;min-width:0;margin-top:2px">'
+                f'<span>{_esc(idee)}</span></label>'
                 f'<a class="btn ghost" href="/content?thema={quote(idee)}">&rarr; Beitrag</a></div>')
+        selall = ('<label style="display:inline-flex;gap:8px;align-items:center;margin-bottom:8px;cursor:pointer">'
+                  '<input type="checkbox" style="width:16px;height:16px;min-width:0" '
+                  "onclick=\"for(const c of document.getElementsByClassName('ideachk'))c.checked=this.checked\">"
+                  ' <span class="hint">Alle auswählen</span></label>')
         vorschau = ('<div class="statusbox" style="margin-top:14px">'
                     f'<div class="step"><span class="ttl">Vorschläge ({len(vorschlaege)})</span></div>'
-                    + zeilen + '</div>')
+                    '<p class="hint" style="margin:4px 0 8px">Kreuze alle an, die du super findest, und '
+                    'übernimm sie zusammen in den Speicher.</p>'
+                    '<form method="post" action="/themen/add">'
+                    + selall + zeilen
+                    + '<div class="row" style="margin-top:10px">'
+                    '<button class="btn" type="submit">Ausgewählte in Speicher</button></div>'
+                    '</form></div>')
 
     manuell = (
         '<div class="statusbox" style="margin-top:14px">'
@@ -1211,7 +1221,13 @@ async def themen_ideen(request: Request):
 @app.post('/themen/add')
 async def themen_add(request: Request):
     form = await request.form()
-    _thema_speichern(form.get('titel') or '', form.get('notiz') or '')
+    titels = [t for t in form.getlist('titel') if (t or '').strip()]
+    notiz = (form.get('notiz') or '').strip()
+    if len(titels) == 1:
+        _thema_speichern(titels[0], notiz)   # manuelles Ablegen (mit optionaler Notiz)
+    else:
+        for t in titels:                     # Mehrfachauswahl aus den Vorschlägen
+            _thema_speichern(t)
     return RedirectResponse('/themen', status_code=303)
 
 
