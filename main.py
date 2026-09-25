@@ -41,6 +41,7 @@ LI_PATH = DATA_DIR / 'linkedin_posts.json'
 CONTENT_PATH = DATA_DIR / 'content_posts.json'
 CONTENT_SPEC_PATH = DATA_DIR / 'content_prompts.json'
 PROFIL_PATH = DATA_DIR / 'profil.json'          # zentrales „Über mich" für alle Content-Agenten
+TEXTPROBEN_PATH = DATA_DIR / 'textproben.json'  # echte Schreibproben als Stil-Anker für die Text-Agenten
 TOPICS_PATH = DATA_DIR / 'themen.json'          # Themenspeicher (Ideen-Inbox)
 REFS_DIR = DATA_DIR / 'refs'        # Referenzfotos (Gesicht) – bleiben auf dem Volume
 STIL_DIR = DATA_DIR / 'stil'        # Stil-Referenzbilder (Look/Komposition, keine Identität)
@@ -191,9 +192,23 @@ def _profil() -> str:
     return PROFIL_DEFAULT
 
 
-def _mit_profil(agent_prompt: str) -> str:
-    """Stellt das zentrale Profil jedem Agenten-System-Prompt voran."""
-    return f'## Über die Person, für die du arbeitest\n{_profil()}\n\n---\n\n{agent_prompt}'
+def _textproben() -> str:
+    d = _lade(TEXTPROBEN_PATH, None)
+    if isinstance(d, dict) and (d.get('text') or '').strip():
+        return d['text'].strip()
+    return ''
+
+
+def _mit_profil(agent_prompt: str, mit_stil: bool = False) -> str:
+    """Stellt das zentrale Profil (und optional echte Schreibproben als Stil-Anker) voran."""
+    kopf = f'## Über die Person, für die du arbeitest\n{_profil()}\n\n'
+    if mit_stil:
+        tp = _textproben()
+        if tp:
+            kopf += ('## Echte Schreibproben von Jörn (STIL-ANKER: Übernimm Rhythmus, Satzbau, Wortwahl, '
+                     'Länge, Absatzführung und Haltung dieser Texte – NICHT ihren Inhalt. Schreibe so, wie '
+                     'er hier schreibt, nicht wie eine KI):\n\n' + tp + '\n\n')
+    return kopf + '---\n\n' + agent_prompt
 
 
 def _kontext_default() -> bool:
@@ -430,13 +445,13 @@ def _content_pipeline(thema: str, kontext_md: str = '') -> dict:
                                   'erfinde keine Zahlen.)')
     thema_txt = thema.strip() or '(Kein Thema vorgegeben – wähle den stärksten Aufhänger aus der Faktengrundlage.)'
 
-    brief = _ki_text(_mit_profil(p['kurator']),
+    brief = _ki_text(_mit_profil(p['kurator'], mit_stil=True),
                      f'Thema/Aufhänger vom Nutzer:\n{thema_txt}\n\n'
                      f'Faktengrundlage (aktueller Branchenüberblick):\n\n{fakt}', 2000)
-    doppel = _ki_text(_mit_profil(p['texter']),
+    doppel = _ki_text(_mit_profil(p['texter'], mit_stil=True),
                       f'Briefing:\n\n{brief}\n\nFaktengrundlage:\n\n{fakt}', 4500)
     linkedin, newsletter, instagram = _split_kanaele(doppel)
-    pruef = _ki_text(_mit_profil(p['pruefer']),
+    pruef = _ki_text(_mit_profil(p['pruefer'], mit_stil=True),
                      f'Faktengrundlage:\n\n{fakt}\n\nLinkedIn-Post:\n{linkedin}\n\n'
                      f'LinkedIn-Newsletter:\n{newsletter}\n\nInstagram-Entwurf:\n{instagram}', 2200)
     bildprompt = _ki_text(_mit_profil(p['bildprompt']),
@@ -502,7 +517,7 @@ def _ideen_generieren(fokus: str = '', anzahl: int = 12):
     user = f'Schlage {anzahl} konkrete Themen/Aufhänger vor.'
     if (fokus or '').strip():
         user += f'\n\nAktueller Fokus / Wunschrichtung des Nutzers:\n{fokus.strip()}'
-    text = _ki_text(_mit_profil(p['ideen']), user, 1500)
+    text = _ki_text(_mit_profil(p['ideen'], mit_stil=True), user, 1500)
     ideen = []
     for zeile in (text or '').splitlines():
         z = zeile.strip().lstrip('-*•').strip()
@@ -780,7 +795,7 @@ def _slideshow_erzeugen(cid: str):
     if not eintrag:
         raise RuntimeError('Eintrag nicht gefunden.')
     p = _content_prompts()
-    text = _ki_text(_mit_profil(p['reel']),
+    text = _ki_text(_mit_profil(p['reel'], mit_stil=True),
                     f'Wetter-Kontext:\n{_wetter_kontext()}\n\n'
                     f'Thema/Briefing:\n\n{eintrag.get("brief") or ""}\n\n'
                     f'Instagram-Fassung:\n{eintrag.get("instagram") or ""}', 2000)
@@ -1233,6 +1248,7 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
         'Aktuellen Wochenüberblick als Faktengrundlage nutzen (Auswahl bleibt gespeichert)</label>'
         f'<div class="row"><button class="btn" type="submit"{aktiv}>Pipeline starten</button> '
         '<a class="btn ghost" href="/content/profil">Profil „Über mich"</a> '
+        '<a class="btn ghost" href="/content/textproben">Textproben (Schreibstil)</a> '
         '<a class="btn ghost" href="/content/vorlagen">Agenten-Vorlagen</a></div>'
         '<p class="hint" style="margin:8px 0 0">Dauert ~1 Minute (drei Modelldurchläufe). Für Bilder '
         'liefert die Instagram-Fassung ein fertiges Bild-Briefing (Nano Banana / Gemini).</p>'
@@ -1712,6 +1728,7 @@ async def content_vorlagen_speichern(request: Request):
 def content_export(request: Request):
     data = {'exportiert': datetime.now().isoformat(timespec='seconds'),
             'profil': _lade(PROFIL_PATH, {}),
+            'textproben': _lade(TEXTPROBEN_PATH, {}),
             'prompts': _lade(CONTENT_SPEC_PATH, {}),
             'themen': _themen_laden(),
             'content': _content_laden()}
@@ -1738,6 +1755,8 @@ async def content_import(request: Request):
         _sichere(TOPICS_PATH, data['themen'])
     if isinstance(data.get('profil'), dict):
         _sichere(PROFIL_PATH, data['profil'])
+    if isinstance(data.get('textproben'), dict):
+        _sichere(TEXTPROBEN_PATH, data['textproben'])
     if isinstance(data.get('prompts'), dict):
         _sichere(CONTENT_SPEC_PATH, data['prompts'])
     return RedirectResponse('/content', status_code=303)
@@ -1772,6 +1791,31 @@ async def content_profil_speichern(request: Request):
     _sichere(PROFIL_PATH, {'text': text, 'geaendert': datetime.now().isoformat(timespec='seconds')}
              if text else {})
     return RedirectResponse('/content/profil?ok=1', status_code=303)
+
+
+@app.get('/content/textproben', response_class=HTMLResponse)
+def content_textproben(request: Request, ok: str = ''):
+    hinweis = '<p class="msg-ok">Textproben gespeichert.</p>' if ok else ''
+    inhalt = (_platte('Textproben &ndash; dein Schreibstil als Vorlage für die Text-Agenten')
+              + '<p style="margin-top:12px"><a href="/content">&larr; Zur Content-Pipeline</a></p>'
+              + hinweis
+              + '<p class="hint">Füge hier 1–3 deiner ECHTEN Beiträge ein (durch eine Leerzeile getrennt). '
+              'Sie werden Kurator, Texter, Prüfer, Reel und Ideengeber als Stil-Anker vorangestellt – damit '
+              'die Texte in deinem Rhythmus, Satzbau und Ton entstehen. Es zählt der Stil, nicht der '
+              'Inhalt; je typischer die Beispiele, desto besser.</p>'
+              '<form method="post" action="/content/textproben">'
+              f'<textarea name="text" rows="22" style="width:100%;font-size:13px">{_esc(_textproben())}</textarea>'
+              '<div class="row" style="margin-top:10px"><button class="btn" type="submit">Speichern</button>'
+              '</div></form>')
+    return HTMLResponse(_seite(inhalt, request.state.user))
+
+
+@app.post('/content/textproben')
+async def content_textproben_speichern(request: Request):
+    form = await request.form()
+    text = (form.get('text') or '').strip()
+    _sichere(TEXTPROBEN_PATH, {'text': text} if text else {})
+    return RedirectResponse('/content/textproben?ok=1', status_code=303)
 
 
 @app.post('/content/referenz')
