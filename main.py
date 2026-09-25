@@ -312,19 +312,20 @@ BILDPROMPT_DEFAULT = (
     'keine Erklärung, keine Varianten.')
 
 REEL_DEFAULT = (
-    'Du schreibst ein Reel-Drehbuch für Instagram für die Person aus dem Profil oben – ein kurzes, '
-    'vertikales Video (ca. 20–45 Sekunden), das sie selbst filmt und spricht.\n\n'
+    'Du planst ein Instagram-Slideshow-Reel für die Person aus dem Profil oben – eine Bildfolge aus 4–6 '
+    'Slides, die zusammen eine kleine Dramaturgie ergeben: erste Slide = Hook, dann Aufbau, dann Pointe/'
+    'Abschluss. Der Nutzer baut daraus in Instagram/CapCut ein Reel und legt die On-Screen-Texte über die '
+    'Bilder.\n\n'
     f'Ton: {_TONREGELN}\n\n'
-    'Gib ein sofort umsetzbares Drehbuch als Markdown zurück, genau mit dieser Struktur:\n'
-    '- **Hook (0–2 Sek.):** ein starker erster Satz/Blickfang, der sofort stoppt.\n'
-    '- **Szenen:** 3–5 kurze Szenen, je mit „Bild:" (was ist zu sehen / Einstellung), „Text:" (kurzer '
-    'On-Screen-Text, max. ~6 Wörter) und „Sprich:" (der Satz, den er in die Kamera sagt).\n'
-    '- **Abschluss/CTA:** ein ruhiger, nicht aufgesetzter Schluss.\n'
-    '- **Länge & Tempo:** grobe Sekundenangabe plus dezenter Musik-/Schnitthinweis.\n'
-    '- **Caption:** kurze Bildunterschrift für den Reel-Post, danach maximal 5 passende, branchenbezogene '
-    'Hashtags in einer eigenen Zeile.\n'
-    'Klare Haltung, gern zugespitzt; nur Skyport-eigene oder belegte Zahlen, ohne „(eigene Angabe)". Gib '
-    'AUSSCHLIESSLICH das Drehbuch zurück – keine Vorrede.')
+    'Gib GENAU dieses Format zurück (sonst nichts):\n'
+    'Caption: <kurze Caption für den Reel-Post; danach höchstens 3 gezielte Hashtags, oder keine>\n'
+    'Danach pro Slide ein Block, eingeleitet durch eine eigene Zeile „[SLIDE]":\n'
+    '[SLIDE]\n'
+    'Text: <kurzer, starker On-Screen-Text für diese Slide, max. ~6 Wörter>\n'
+    'Bild: <ein fertiger Bild-Prompt für diese Slide – im Umgebungs-Repertoire und Look aus dem Profil, '
+    'warm und persönlich, KEIN Text im Bild, keine Logos>\n'
+    '(4–6 solcher [SLIDE]-Blöcke; die Slides sollen eine erkennbare Reihenfolge/Steigerung haben). Keine '
+    'Emojis. Gib nur „Caption:" und die [SLIDE]-Blöcke zurück.')
 
 IDEEN_DEFAULT = (
     'Du bist Themen-Ideengeber für die Person aus dem Profil oben.\n\n'
@@ -441,10 +442,8 @@ def _content_pipeline(thema: str, kontext_md: str = '') -> dict:
     bildprompt = _ki_text(_mit_profil(p['bildprompt']),
                           f'Wetter-Kontext (für ein aktuelles, wetterpassendes Outfit):\n{_wetter_kontext()}\n\n'
                           f'Thema/Briefing:\n\n{brief}\n\nInstagram-Fassung:\n{instagram}', 800)
-    reel = _ki_text(_mit_profil(p['reel']),
-                    f'Thema/Briefing:\n\n{brief}\n\nInstagram-Fassung:\n{instagram}', 1500)
     return {'brief': brief, 'linkedin': linkedin, 'newsletter': newsletter, 'instagram': instagram,
-            'pruef': pruef, 'bildprompt': bildprompt, 'reel': reel}
+            'pruef': pruef, 'bildprompt': bildprompt}
 
 
 def _content_laden():
@@ -459,14 +458,13 @@ def _content_speichern(eintrag: dict) -> str:
     return eintrag['id']
 
 
-def _content_aktualisieren(cid: str, linkedin: str, newsletter: str, instagram: str, reel: str):
+def _content_aktualisieren(cid: str, linkedin: str, newsletter: str, instagram: str):
     liste = _content_laden()
     for e in liste:
         if e.get('id') == cid:
             e['linkedin'] = (linkedin or '').strip()
             e['newsletter'] = (newsletter or '').strip()
             e['instagram'] = (instagram or '').strip()
-            e['reel'] = (reel or '').strip()
             _sichere(CONTENT_PATH, liste)
             return
 
@@ -756,6 +754,90 @@ def _bilder_set_erzeugen(cid: str, anzahl: int = 3):
             e['varianten'] = varianten
             _sichere(CONTENT_PATH, liste)
             break
+
+
+def _slideshow_parse(text: str):
+    """Zerlegt die Agenten-Ausgabe in (Caption, [{text, bild}, ...])."""
+    text = text or ''
+    caption = ''
+    m = re.search(r'Caption:\s*(.*?)(?=\n\s*\[SLIDE\]|\Z)', text, re.S | re.I)
+    if m:
+        caption = m.group(1).strip()
+    slides = []
+    for blk in re.split(r'(?mi)^\s*\[SLIDE\]\s*$', text)[1:]:
+        tm = re.search(r'Text:\s*(.+)', blk, re.I)
+        bm = re.search(r'Bild:\s*(.+)', blk, re.S | re.I)
+        b = bm.group(1).strip() if bm else ''
+        if b:
+            slides.append({'text': (tm.group(1).strip() if tm else ''), 'bild': b})
+    return caption, slides[:6]
+
+
+def _slideshow_erzeugen(cid: str):
+    """Erzeugt ein Bild-Slideshow-Reel: Caption + 4–6 Slides (je On-Screen-Text + Bild)."""
+    liste = _content_laden()
+    eintrag = next((e for e in liste if e.get('id') == cid), None)
+    if not eintrag:
+        raise RuntimeError('Eintrag nicht gefunden.')
+    p = _content_prompts()
+    text = _ki_text(_mit_profil(p['reel']),
+                    f'Wetter-Kontext:\n{_wetter_kontext()}\n\n'
+                    f'Thema/Briefing:\n\n{eintrag.get("brief") or ""}\n\n'
+                    f'Instagram-Fassung:\n{eintrag.get("instagram") or ""}', 2000)
+    caption, slides = _slideshow_parse(text)
+    if not slides:
+        raise RuntimeError('Keine Slides erkannt (Agenten-Ausgabe unerwartet).')
+    refs = [str(REFS_DIR / n) for n in _ref_liste()]
+    stil = [str(STIL_DIR / n) for n in _stil_liste()]
+    for alt in (eintrag.get('reel_slides') or []):       # alte Slide-Bilder aufräumen
+        try:
+            (BILDER_DIR / _sicherer_name(alt.get('name', ''))).unlink()
+        except OSError:
+            pass
+    out = []
+    for i, s in enumerate(slides):
+        daten, _m = _erzeuge_bild(s['bild'], refs, stil)
+        daten = _wasserzeichen(daten)
+        name = f'{cid}_s{i + 1}.png'
+        _sichere_bytes(BILDER_DIR / name, daten)
+        out.append({'text': s['text'], 'name': name})
+    for e in liste:
+        if e.get('id') == cid:
+            e['reel_caption'] = caption
+            e['reel_slides'] = out
+            e['reel_ts'] = datetime.now().strftime('%d.%m.%Y %H:%M')
+            _sichere(CONTENT_PATH, liste)
+            break
+
+
+def _reel_block(eintrag: dict, cid: str, gemini_aktiv: bool, hat_refs: bool) -> str:
+    caption = eintrag.get('reel_caption') or ''
+    slides = eintrag.get('reel_slides') or []
+    kacheln = ''
+    for idx, s in enumerate(slides):
+        n = s.get('name') or ''
+        kacheln += (
+            '<div style="display:inline-block;vertical-align:top;margin:0 10px 10px 0;max-width:200px">'
+            f'<img src="/content/bild/{_esc(n)}" alt="" style="width:200px;border:1px solid var(--line);'
+            'border-radius:8px;display:block">'
+            f'<div class="hint" style="margin:3px 0">{idx + 1}. On-Screen-Text: '
+            f'<b>{_esc(s.get("text"))}</b></div>'
+            f'<a class="btn ghost" href="/content/bild/{_esc(n)}" download>herunterladen</a></div>')
+    cap_html = ''
+    if caption:
+        cap_html = ('<div class="hint" style="margin:8px 0 2px">Caption</div>'
+                    f'<textarea id="rc{_esc(cid)}" rows="3" style="width:100%">{_esc(caption)}</textarea>'
+                    f'<div class="row" style="margin-top:3px">{_kopier_btn("rc" + cid)}</div>')
+    if gemini_aktiv and hat_refs:
+        label = 'Slideshow-Reel neu erzeugen' if slides else 'Slideshow-Reel erzeugen'
+        btn = (f'<form method="post" action="/content/{_esc(cid)}/reel" style="display:inline">'
+               f'<button class="btn ghost" type="submit">{label}</button></form>')
+    else:
+        grund = 'GEMINI_API_KEY fehlt' if not gemini_aktiv else 'kein Referenzfoto hinterlegt'
+        btn = f'<span class="hint" style="align-self:center">Reel-Bilder nicht möglich ({grund}).</span>'
+    return ('<div class="hint" style="margin:14px 0 2px">Instagram-Reel (Bild-Slideshow zum Zusammenbauen)</div>'
+            + (f'<div>{kacheln}</div>' if kacheln else '')
+            + cap_html + f'<div class="row" style="margin-top:6px">{btn}</div>')
 
 
 def _bild_block(eintrag: dict, cid: str, gemini_aktiv: bool, hat_refs: bool) -> str:
@@ -1161,7 +1243,6 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
         li = res.get('linkedin') or ''
         nl = res.get('newsletter') or ''
         ig = res.get('instagram') or ''
-        reel = res.get('reel') or ''
         ergebnis = (
             '<div class="statusbox" style="margin-top:14px">'
             '<div class="step"><span class="ttl">1 &middot; Briefing (Kurator)</span></div>'
@@ -1183,11 +1264,7 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
             '<div class="statusbox" style="margin-top:14px">'
             '<div class="step"><span class="ttl">Instagram-Fassung (inkl. Bild-Briefing)</span></div>'
             f'<textarea id="cig" name="instagram" rows="12" style="width:100%;margin-top:8px">{_esc(ig)}</textarea>'
-            f'<div class="row">{_kopier_btn("cig")}</div></div>'
-            '<div class="statusbox" style="margin-top:14px">'
-            '<div class="step"><span class="ttl">Instagram-Reel (Drehbuch)</span></div>'
-            f'<textarea id="cre" name="reel" rows="14" style="width:100%;margin-top:8px">{_esc(reel)}</textarea>'
-            f'<div class="row">{_kopier_btn("cre")} '
+            f'<div class="row">{_kopier_btn("cig")} '
             '<button class="btn" type="submit">Bearbeitete Fassungen speichern</button></div></div>'
             '</form>')
 
@@ -1261,11 +1338,9 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
                 f'<div class="row" style="margin:4px 0 8px">{_kopier_btn("an" + cid)}</div>'
                 '<div class="hint" style="margin:4px 0 2px">Instagram (inkl. Bild-Briefing)</div>'
                 f'<textarea id="ai{_esc(cid)}" rows="6" style="width:100%">{_esc(p.get("instagram") or "")}</textarea>'
-                f'<div class="row" style="margin:4px 0 8px">{_kopier_btn("ai" + cid)}</div>'
-                '<div class="hint" style="margin:4px 0 2px">Instagram-Reel (Drehbuch)</div>'
-                f'<textarea id="ar{_esc(cid)}" rows="8" style="width:100%">{_esc(p.get("reel") or "")}</textarea>'
-                f'<div class="row" style="margin-top:4px">{_kopier_btn("ar" + cid)}</div>'
+                f'<div class="row" style="margin-top:4px">{_kopier_btn("ai" + cid)}</div>'
                 + _bild_block(p, cid, gemini_aktiv, hat_refs)
+                + _reel_block(p, cid, gemini_aktiv, hat_refs)
                 + '<div class="row" style="margin-top:10px">'
                 f'<form method="post" action="/content/{_esc(cid)}/loeschen" style="display:inline" '
                 'onsubmit="return confirm(\'Eintrag löschen?\')">'
@@ -1587,9 +1662,8 @@ async def content_speichern(request: Request):
     li = (form.get('linkedin') or '').strip()
     nl = (form.get('newsletter') or '').strip()
     ig = (form.get('instagram') or '').strip()
-    reel = (form.get('reel') or '').strip()
     if cid:
-        _content_aktualisieren(cid, li, nl, ig, reel)
+        _content_aktualisieren(cid, li, nl, ig)
     return RedirectResponse('/content', status_code=303)
 
 
@@ -1616,7 +1690,7 @@ def content_vorlagen(request: Request, ok: str = '', reset: str = ''):
               + feld('texter', '2 · Texter (LinkedIn + Instagram)')
               + feld('pruefer', '3 · Prüfer (Ampel & Hinweise)')
               + feld('bildprompt', '4 · Bild-Prompt-Designer (Nano Banana)')
-              + feld('reel', '5 · Reel-Drehbuch (Instagram)')
+              + feld('reel', '5 · Reel-Slideshow (Instagram)')
               + feld('ideen', '6 · Themen-Ideengeber')
               + '<div class="row" style="margin-top:10px">'
               '<button class="btn" type="submit">Speichern</button> '
@@ -1805,6 +1879,16 @@ async def content_bilder3(request: Request, cid: str):
         await run_in_threadpool(_bilder_set_erzeugen, cid, 3)
     except Exception as e:  # noqa: BLE001
         return HTMLResponse(_seite(_content_html(hinweis='Varianten konnten nicht erzeugt werden: '
+                                                 + str(e)[:300]), request.state.user))
+    return RedirectResponse('/content', status_code=303)
+
+
+@app.post('/content/{cid}/reel', response_class=HTMLResponse)
+async def content_reel(request: Request, cid: str):
+    try:
+        await run_in_threadpool(_slideshow_erzeugen, cid)
+    except Exception as e:  # noqa: BLE001
+        return HTMLResponse(_seite(_content_html(hinweis='Slideshow-Reel konnte nicht erzeugt werden: '
                                                  + str(e)[:300]), request.state.user))
     return RedirectResponse('/content', status_code=303)
 
