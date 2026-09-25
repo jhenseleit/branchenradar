@@ -3,6 +3,7 @@ uvicorn[standard]==0.46.0
 python-multipart==0.0.26
 anthropic>=0.69
 google-genai>=1.0
+pillow>=10.3
 apscheduler==3.10.4
 tzdata==2024.1
 markdown==3.7

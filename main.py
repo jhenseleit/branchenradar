@@ -10,6 +10,7 @@ ist neu, weil die Nachrichten neu sind.
 Nur für die Rolle "admin" (kostet pro Erstellung Anthropic-Guthaben).
 """
 
+import io
 import json
 import os
 import re
@@ -484,6 +485,46 @@ def _gemini_selftest() -> str:
         return 'FEHLER: ' + str(e)[:400]
 
 
+def _font(size: int):
+    from PIL import ImageFont
+    for pfad in ('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+                 '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'):
+        try:
+            return ImageFont.truetype(pfad, size)
+        except OSError:
+            pass
+    try:
+        return ImageFont.load_default(size=size)   # Pillow >= 10.1
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def _wasserzeichen(daten: bytes, text: str = 'AI-generated') -> bytes:
+    """Legt jedem Bild einen sichtbaren „AI-generated"-Hinweis unten rechts auf.
+    Wirft bei Fehler eine Exception – es wird nie ein Bild OHNE Hinweis gespeichert."""
+    from PIL import Image, ImageDraw
+    img = Image.open(io.BytesIO(daten)).convert('RGB')
+    draw = ImageDraw.Draw(img, 'RGBA')
+    w, h = img.size
+    size = max(16, w // 30)
+    font = _font(size)
+    try:
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw, th, offx, offy = bbox[2] - bbox[0], bbox[3] - bbox[1], bbox[0], bbox[1]
+    except AttributeError:  # sehr alte Pillow
+        tw, th = draw.textsize(text, font=font)
+        offx = offy = 0
+    pad = max(6, size // 3)
+    rand = max(10, w // 60)
+    box_w, box_h = tw + pad * 2, th + pad * 2
+    bx, by = w - box_w - rand, h - box_h - rand
+    draw.rectangle([bx, by, bx + box_w, by + box_h], fill=(0, 0, 0, 150))
+    draw.text((bx + pad - offx, by + pad - offy), text, font=font, fill=(255, 255, 255, 240))
+    out = io.BytesIO()
+    img.save(out, format='PNG')
+    return out.getvalue()
+
+
 def _bild_fuer_content(cid: str):
     """Erzeugt ein Bild für den gespeicherten Content-Eintrag, Ablage unter /data/bilder."""
     liste = _content_laden()
@@ -492,8 +533,9 @@ def _bild_fuer_content(cid: str):
         raise RuntimeError('Eintrag nicht gefunden.')
     prompt = (eintrag.get('bildprompt') or '').strip() or _bild_briefing(eintrag.get('instagram') or '')
     refs = [str(REFS_DIR / n) for n in _ref_liste()]
-    daten, mime = _erzeuge_bild(prompt, refs)
-    ext = _BILD_EXT.get(mime, '.png')
+    daten, _mime = _erzeuge_bild(prompt, refs)
+    daten = _wasserzeichen(daten)          # Pflicht: sichtbarer „AI-generated"-Hinweis auf JEDEM Bild
+    ext = '.png'
     name = f'{cid}{ext}'
     _sichere_bytes(BILDER_DIR / name, daten)
     for e2 in set(_BILD_EXT.values()):     # alte Bilddatei anderer Endung aufräumen
