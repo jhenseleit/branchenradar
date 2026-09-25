@@ -22,7 +22,7 @@ from urllib.parse import quote
 
 import markdown as _md
 from fastapi import FastAPI, File, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -559,12 +559,6 @@ def _bild_fuer_content(cid: str):
 def _bild_block(eintrag: dict, cid: str, gemini_aktiv: bool, hat_refs: bool) -> str:
     bild = eintrag.get('bild')
     prompt = (eintrag.get('bildprompt') or '').strip() or _bild_briefing(eintrag.get('instagram') or '')
-    prompt_form = (
-        '<div class="hint" style="margin:10px 0 2px">Bild-Prompt (KI-Vorschlag &ndash; editierbar, deine Freigabe)</div>'
-        f'<form method="post" action="/content/{_esc(cid)}/bildprompt">'
-        f'<textarea name="bildprompt" rows="4" style="width:100%">{_esc(prompt)}</textarea>'
-        '<div class="row" style="margin-top:4px"><button class="btn ghost" type="submit">Prompt speichern</button></div>'
-        '</form>')
     vorschau = ''
     if bild:
         vorschau = (
@@ -575,13 +569,20 @@ def _bild_block(eintrag: dict, cid: str, gemini_aktiv: bool, hat_refs: bool) -> 
             f'{_esc(eintrag.get("bild_ts") or "")}</span></div></div>')
     if gemini_aktiv and hat_refs:
         label = 'Bild neu erzeugen' if bild else 'Bild erzeugen (Nano Banana)'
-        steuer = (f'<form method="post" action="/content/{_esc(cid)}/bild" style="display:inline">'
-                  f'<button class="btn ghost" type="submit">{label}</button></form>')
+        erzeugen = (f'<button class="btn ghost" type="submit" formaction="/content/{_esc(cid)}/bild">'
+                    f'{label}</button>')
     else:
         grund = 'GEMINI_API_KEY fehlt' if not gemini_aktiv else 'kein Referenzfoto hinterlegt'
-        steuer = f'<span class="hint">Bildgenerierung nicht möglich ({grund}).</span>'
-    return ('<div class="hint" style="margin:12px 0 2px">Instagram-Bild</div>' + prompt_form
-            + vorschau + f'<div class="row" style="margin-top:6px">{steuer}</div>')
+        erzeugen = f'<span class="hint" style="align-self:center">Bildgenerierung nicht möglich ({grund}).</span>'
+    # EIN Formular: „Bild erzeugen" nimmt genau den Text aus dem Feld (kein Prompt-Verlust mehr).
+    return ('<div class="hint" style="margin:12px 0 2px">Instagram-Bild</div>' + vorschau
+            + '<div class="hint" style="margin:6px 0 2px">Bild-Prompt (KI-Vorschlag &ndash; editierbar; '
+            '„Bild erzeugen" verwendet genau diesen Text)</div>'
+            f'<form method="post" action="/content/{_esc(cid)}/bildprompt">'
+            f'<textarea name="bildprompt" rows="4" style="width:100%">{_esc(prompt)}</textarea>'
+            '<div class="row" style="margin-top:6px">'
+            '<button class="btn ghost" type="submit">Prompt speichern</button>'
+            + erzeugen + '</div></form>')
 
 
 # ── Zugang (nur admin) ───────────────────────────────────────────────────────
@@ -1018,9 +1019,22 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
         archiv = ('<div class="step" style="margin-top:26px"><span class="ttl">Gespeicherte Inhalte '
                   f'({len(posts)})</span></div>' + zeilen)
 
+    sicherung_karte = (
+        '<div class="statusbox" style="margin-top:26px">'
+        '<div class="step"><span class="ttl">Sicherung</span></div>'
+        '<p class="hint" style="margin:4px 0 8px">Beiträge, Themen, Profil und Agenten-Vorlagen als Datei '
+        'sichern oder wieder einspielen. (Zusätzlich sichert Sliplane das Volume täglich automatisch.)</p>'
+        '<div class="row"><a class="btn ghost" href="/content/export.json">Backup herunterladen</a>'
+        '<form method="post" action="/content/import" enctype="multipart/form-data" class="row" '
+        "onsubmit=\"return confirm('Backup einspielen? Überschreibt die aktuellen Beiträge, Themen, "
+        "Profil und Vorlagen.')\">"
+        '<input type="file" name="datei" accept="application/json,.json">'
+        '<button class="btn ghost" type="submit">Backup einspielen</button></form></div></div>')
+
     warn = (f'<div class="statusbox"><span class="badge warn">{hinweis}</span></div>' if hinweis else '')
     return (_platte('Content-Pipeline &ndash; Kurator &middot; Texter &middot; Prüfer, Freigabe durch dich')
-            + _subtabs('content') + kistat + warn + form + referenz_karte + ergebnis + archiv)
+            + _subtabs('content') + kistat + warn + form + referenz_karte + ergebnis + archiv
+            + sicherung_karte)
 
 
 def _themen_html(vorschlaege=None, fokus='', hinweis=''):
@@ -1362,6 +1376,41 @@ async def content_vorlagen_speichern(request: Request):
     return RedirectResponse('/content/vorlagen?ok=1', status_code=303)
 
 
+@app.get('/content/export.json')
+def content_export(request: Request):
+    data = {'exportiert': datetime.now().isoformat(timespec='seconds'),
+            'profil': _lade(PROFIL_PATH, {}),
+            'prompts': _lade(CONTENT_SPEC_PATH, {}),
+            'themen': _themen_laden(),
+            'content': _content_laden()}
+    body = json.dumps(data, ensure_ascii=False, indent=2)
+    fname = 'branchenradar-backup-' + datetime.now().strftime('%Y%m%d-%H%M') + '.json'
+    return Response(body, media_type='application/json; charset=utf-8',
+                    headers={'Content-Disposition': f'attachment; filename="{fname}"'})
+
+
+@app.post('/content/import', response_class=HTMLResponse)
+async def content_import(request: Request):
+    form = await request.form()
+    f = form.get('datei')
+    if not getattr(f, 'filename', ''):
+        return RedirectResponse('/content', status_code=303)
+    try:
+        data = json.loads((await f.read()).decode('utf-8'))
+    except Exception as e:  # noqa: BLE001
+        return HTMLResponse(_seite(_content_html(hinweis='Import fehlgeschlagen: ' + str(e)[:200]),
+                                   request.state.user))
+    if isinstance(data.get('content'), list):
+        _sichere(CONTENT_PATH, data['content'])
+    if isinstance(data.get('themen'), list):
+        _sichere(TOPICS_PATH, data['themen'])
+    if isinstance(data.get('profil'), dict):
+        _sichere(PROFIL_PATH, data['profil'])
+    if isinstance(data.get('prompts'), dict):
+        _sichere(CONTENT_SPEC_PATH, data['prompts'])
+    return RedirectResponse('/content', status_code=303)
+
+
 @app.get('/content/profil', response_class=HTMLResponse)
 def content_profil(request: Request, ok: str = '', reset: str = ''):
     if reset:
@@ -1459,6 +1508,15 @@ async def content_bildprompt_speichern(request: Request, cid: str):
 
 @app.post('/content/{cid}/bild', response_class=HTMLResponse)
 async def content_bild_erzeugen(request: Request, cid: str):
+    form = await request.form()
+    txt = (form.get('bildprompt') or '').strip()
+    if txt:                                  # aktuellen Feldinhalt vor der Erzeugung sichern
+        liste = _content_laden()
+        for e in liste:
+            if e.get('id') == cid:
+                e['bildprompt'] = txt
+                _sichere(CONTENT_PATH, liste)
+                break
     try:
         await run_in_threadpool(_bild_fuer_content, cid)
     except Exception as e:  # noqa: BLE001
