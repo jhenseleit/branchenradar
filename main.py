@@ -295,6 +295,21 @@ BILDPROMPT_DEFAULT = (
     'Gib AUSSCHLIESSLICH den fertigen Bild-Prompt als Fließtext zurück (3–5 Sätze) – keine Überschrift, '
     'keine Erklärung, keine Varianten.')
 
+REEL_DEFAULT = (
+    'Du schreibst ein Reel-Drehbuch für Instagram für die Person aus dem Profil oben – ein kurzes, '
+    'vertikales Video (ca. 20–45 Sekunden), das sie selbst filmt und spricht.\n\n'
+    f'Ton: {_TONREGELN}\n\n'
+    'Gib ein sofort umsetzbares Drehbuch als Markdown zurück, genau mit dieser Struktur:\n'
+    '- **Hook (0–2 Sek.):** ein starker erster Satz/Blickfang, der sofort stoppt.\n'
+    '- **Szenen:** 3–5 kurze Szenen, je mit „Bild:" (was ist zu sehen / Einstellung), „Text:" (kurzer '
+    'On-Screen-Text, max. ~6 Wörter) und „Sprich:" (der Satz, den er in die Kamera sagt).\n'
+    '- **Abschluss/CTA:** ein ruhiger, nicht aufgesetzter Schluss.\n'
+    '- **Länge & Tempo:** grobe Sekundenangabe plus dezenter Musik-/Schnitthinweis.\n'
+    '- **Caption:** kurze Bildunterschrift für den Reel-Post, danach maximal 5 passende, branchenbezogene '
+    'Hashtags in einer eigenen Zeile.\n'
+    'Klare Haltung, gern zugespitzt; nur Skyport-eigene oder belegte Zahlen, ohne „(eigene Angabe)". Gib '
+    'AUSSCHLIESSLICH das Drehbuch zurück – keine Vorrede.')
+
 IDEEN_DEFAULT = (
     'Du bist Themen-Ideengeber für die Person aus dem Profil oben.\n\n'
     'Schlage konkrete, posting-würdige Themen/Aufhänger vor, die zu ihrem Profil, ihren Kernthemen und '
@@ -314,6 +329,7 @@ def _content_prompts() -> dict:
             'texter': d.get('texter') or TEXTER_DEFAULT,
             'pruefer': d.get('pruefer') or PRUEFER_DEFAULT,
             'bildprompt': d.get('bildprompt') or BILDPROMPT_DEFAULT,
+            'reel': d.get('reel') or REEL_DEFAULT,
             'ideen': d.get('ideen') or IDEEN_DEFAULT}
 
 
@@ -409,8 +425,10 @@ def _content_pipeline(thema: str, kontext_md: str = '') -> dict:
     bildprompt = _ki_text(_mit_profil(p['bildprompt']),
                           f'Wetter-Kontext (für ein aktuelles, wetterpassendes Outfit):\n{_wetter_kontext()}\n\n'
                           f'Thema/Briefing:\n\n{brief}\n\nInstagram-Fassung:\n{instagram}', 800)
+    reel = _ki_text(_mit_profil(p['reel']),
+                    f'Thema/Briefing:\n\n{brief}\n\nInstagram-Fassung:\n{instagram}', 1500)
     return {'brief': brief, 'linkedin': linkedin, 'newsletter': newsletter, 'instagram': instagram,
-            'pruef': pruef, 'bildprompt': bildprompt}
+            'pruef': pruef, 'bildprompt': bildprompt, 'reel': reel}
 
 
 def _content_laden():
@@ -425,13 +443,14 @@ def _content_speichern(eintrag: dict) -> str:
     return eintrag['id']
 
 
-def _content_aktualisieren(cid: str, linkedin: str, newsletter: str, instagram: str):
+def _content_aktualisieren(cid: str, linkedin: str, newsletter: str, instagram: str, reel: str):
     liste = _content_laden()
     for e in liste:
         if e.get('id') == cid:
             e['linkedin'] = (linkedin or '').strip()
             e['newsletter'] = (newsletter or '').strip()
             e['instagram'] = (instagram or '').strip()
+            e['reel'] = (reel or '').strip()
             _sichere(CONTENT_PATH, liste)
             return
 
@@ -1124,6 +1143,7 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
         li = res.get('linkedin') or ''
         nl = res.get('newsletter') or ''
         ig = res.get('instagram') or ''
+        reel = res.get('reel') or ''
         ergebnis = (
             '<div class="statusbox" style="margin-top:14px">'
             '<div class="step"><span class="ttl">1 &middot; Briefing (Kurator)</span></div>'
@@ -1145,7 +1165,11 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
             '<div class="statusbox" style="margin-top:14px">'
             '<div class="step"><span class="ttl">Instagram-Fassung (inkl. Bild-Briefing)</span></div>'
             f'<textarea id="cig" name="instagram" rows="12" style="width:100%;margin-top:8px">{_esc(ig)}</textarea>'
-            f'<div class="row">{_kopier_btn("cig")} '
+            f'<div class="row">{_kopier_btn("cig")}</div></div>'
+            '<div class="statusbox" style="margin-top:14px">'
+            '<div class="step"><span class="ttl">Instagram-Reel (Drehbuch)</span></div>'
+            f'<textarea id="cre" name="reel" rows="14" style="width:100%;margin-top:8px">{_esc(reel)}</textarea>'
+            f'<div class="row">{_kopier_btn("cre")} '
             '<button class="btn" type="submit">Bearbeitete Fassungen speichern</button></div></div>'
             '</form>')
 
@@ -1219,7 +1243,10 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
                 f'<div class="row" style="margin:4px 0 8px">{_kopier_btn("an" + cid)}</div>'
                 '<div class="hint" style="margin:4px 0 2px">Instagram (inkl. Bild-Briefing)</div>'
                 f'<textarea id="ai{_esc(cid)}" rows="6" style="width:100%">{_esc(p.get("instagram") or "")}</textarea>'
-                f'<div class="row" style="margin-top:4px">{_kopier_btn("ai" + cid)}</div>'
+                f'<div class="row" style="margin:4px 0 8px">{_kopier_btn("ai" + cid)}</div>'
+                '<div class="hint" style="margin:4px 0 2px">Instagram-Reel (Drehbuch)</div>'
+                f'<textarea id="ar{_esc(cid)}" rows="8" style="width:100%">{_esc(p.get("reel") or "")}</textarea>'
+                f'<div class="row" style="margin-top:4px">{_kopier_btn("ar" + cid)}</div>'
                 + _bild_block(p, cid, gemini_aktiv, hat_refs)
                 + '<div class="row" style="margin-top:10px">'
                 f'<form method="post" action="/content/{_esc(cid)}/loeschen" style="display:inline" '
@@ -1541,8 +1568,9 @@ async def content_speichern(request: Request):
     li = (form.get('linkedin') or '').strip()
     nl = (form.get('newsletter') or '').strip()
     ig = (form.get('instagram') or '').strip()
+    reel = (form.get('reel') or '').strip()
     if cid:
-        _content_aktualisieren(cid, li, nl, ig)
+        _content_aktualisieren(cid, li, nl, ig, reel)
     return RedirectResponse('/content', status_code=303)
 
 
@@ -1569,7 +1597,8 @@ def content_vorlagen(request: Request, ok: str = '', reset: str = ''):
               + feld('texter', '2 · Texter (LinkedIn + Instagram)')
               + feld('pruefer', '3 · Prüfer (Ampel & Hinweise)')
               + feld('bildprompt', '4 · Bild-Prompt-Designer (Nano Banana)')
-              + feld('ideen', '5 · Themen-Ideengeber')
+              + feld('reel', '5 · Reel-Drehbuch (Instagram)')
+              + feld('ideen', '6 · Themen-Ideengeber')
               + '<div class="row" style="margin-top:10px">'
               '<button class="btn" type="submit">Speichern</button> '
               '<a class="btn ghost" href="/content/vorlagen?reset=1">Auf Standard zurücksetzen</a>'
@@ -1580,7 +1609,8 @@ def content_vorlagen(request: Request, ok: str = '', reset: str = ''):
 @app.post('/content/vorlagen')
 async def content_vorlagen_speichern(request: Request):
     form = await request.form()
-    d = {k: (form.get(k) or '').strip() for k in ('kurator', 'texter', 'pruefer', 'bildprompt', 'ideen')}
+    d = {k: (form.get(k) or '').strip()
+         for k in ('kurator', 'texter', 'pruefer', 'bildprompt', 'reel', 'ideen')}
     _sichere(CONTENT_SPEC_PATH, {k: v for k, v in d.items() if v})  # leer -> Standard
     return RedirectResponse('/content/vorlagen?ok=1', status_code=303)
 
