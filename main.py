@@ -19,8 +19,8 @@ from datetime import datetime
 from pathlib import Path
 
 import markdown as _md
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import FastAPI, File, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -38,9 +38,14 @@ AUTOMATIK_PATH = DATA_DIR / 'automatik.json'
 LI_PATH = DATA_DIR / 'linkedin_posts.json'
 CONTENT_PATH = DATA_DIR / 'content_posts.json'
 CONTENT_SPEC_PATH = DATA_DIR / 'content_prompts.json'
+REFS_DIR = DATA_DIR / 'refs'        # Referenzfotos (Gesicht) – bleiben auf dem Volume
+BILDER_DIR = DATA_DIR / 'bilder'    # erzeugte Instagram-Bilder
 AUDIT_DB = DATA_DIR / 'audit.db'
 
 MODELL = os.environ.get('BRANCHENRADAR_MODELL', 'claude-opus-5')
+# Nano Banana = Googles Gemini Bildmodell (eigener GEMINI_API_KEY, eigene Abrechnung)
+GEMINI_BILD_MODELL = os.environ.get('GEMINI_BILD_MODELL', 'gemini-2.5-flash-image')
+GEMINI_BILD_FORMAT = os.environ.get('GEMINI_BILD_FORMAT', '4:5')  # Instagram-Hochformat
 MAX_PAUSE = 14  # Fortsetzungen für pause_turn (Web-Such-Schleife)
 
 app = FastAPI(title=APP_NAME, docs_url=None, redoc_url=None)
@@ -271,6 +276,134 @@ def _content_aktualisieren(cid: str, linkedin: str, instagram: str):
 
 def _content_loeschen(cid: str):
     _sichere(CONTENT_PATH, [e for e in _content_laden() if e.get('id') != cid])
+
+
+# ── Bildgenerierung (Nano Banana / Gemini) mit Referenzgesicht ───────────────
+_BILD_EXT = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp'}
+_BILD_SUFFIXE = ('.jpg', '.jpeg', '.png', '.webp')
+
+
+def _sichere_bytes(pfad: Path, daten: bytes):
+    try:
+        pfad.parent.mkdir(parents=True, exist_ok=True)
+        pfad.write_bytes(daten)
+    except OSError:
+        pass
+
+
+def _sicherer_name(name: str) -> str:
+    """Nur Basisname, keine Pfadanteile (gegen Directory Traversal)."""
+    return os.path.basename(str(name or '')).replace('\x00', '')
+
+
+def _ref_liste():
+    try:
+        return sorted(p.name for p in REFS_DIR.iterdir()
+                      if p.is_file() and p.suffix.lower() in _BILD_SUFFIXE)
+    except (OSError, FileNotFoundError):
+        return []
+
+
+def _bild_briefing(instagram_text: str) -> str:
+    """Extrahiert den Bild-Prompt aus der „Bild-Briefing:"-Zeile der IG-Fassung."""
+    t = instagram_text or ''
+    m = re.search(r'Bild-?Briefing\s*:\s*(.+)', t, re.IGNORECASE | re.DOTALL)
+    return (m.group(1).strip() if m else t.strip())
+
+
+def _erzeuge_bild(prompt: str, ref_paths):
+    """Ruft Gemini (Nano Banana) mit Prompt + Referenzfotos auf. -> (bytes, mime)."""
+    key = os.environ.get('GEMINI_API_KEY')
+    if not key:
+        raise RuntimeError('GEMINI_API_KEY ist nicht gesetzt.')
+    if not ref_paths:
+        raise RuntimeError('Kein Referenzfoto hinterlegt.')
+    from google import genai
+    from google.genai import types
+    client = genai.Client(api_key=key)
+
+    voll = ('Erstelle ein fotorealistisches, markenpassendes Bild für einen Business-Instagram-Post. '
+            'Die abgebildete Person ist die Referenzperson aus den beigefügten Fotos – wahre ihr Gesicht '
+            'und ihre Identität möglichst genau. Kein Text im Bild, keine Logos, seriös und sachlich, keine '
+            'Effekthascherei. Motiv: ' + (prompt or '').strip())
+    contents = [voll]
+    for rp in ref_paths:
+        try:
+            daten = Path(rp).read_bytes()
+        except OSError:
+            continue
+        mime = 'image/png' if str(rp).lower().endswith('.png') else 'image/jpeg'
+        contents.append(types.Part.from_bytes(data=daten, mime_type=mime))
+
+    def _call(mit_format: bool):
+        cfg = {'response_modalities': ['IMAGE']}
+        if mit_format:
+            cfg['image_config'] = types.ImageConfig(aspect_ratio=GEMINI_BILD_FORMAT)
+        return client.models.generate_content(
+            model=GEMINI_BILD_MODELL, contents=contents,
+            config=types.GenerateContentConfig(**cfg))
+    try:
+        resp = _call(True)
+    except Exception:  # noqa: BLE001 - ältere SDKs kennen aspect_ratio evtl. nicht
+        resp = _call(False)
+
+    for part in (getattr(resp, 'parts', None) or []):
+        inline = getattr(part, 'inline_data', None)
+        if inline is not None and getattr(inline, 'data', None):
+            daten = inline.data
+            if isinstance(daten, str):
+                import base64 as _b64
+                daten = _b64.b64decode(daten)
+            return daten, (getattr(inline, 'mime_type', None) or 'image/png')
+    raise RuntimeError('Gemini hat kein Bild zurückgegeben (evtl. blockiert oder Nur-Text-Antwort).')
+
+
+def _bild_fuer_content(cid: str):
+    """Erzeugt ein Bild für den gespeicherten Content-Eintrag, Ablage unter /data/bilder."""
+    liste = _content_laden()
+    eintrag = next((e for e in liste if e.get('id') == cid), None)
+    if not eintrag:
+        raise RuntimeError('Eintrag nicht gefunden.')
+    prompt = _bild_briefing(eintrag.get('instagram') or '')
+    refs = [str(REFS_DIR / n) for n in _ref_liste()]
+    daten, mime = _erzeuge_bild(prompt, refs)
+    ext = _BILD_EXT.get(mime, '.png')
+    name = f'{cid}{ext}'
+    _sichere_bytes(BILDER_DIR / name, daten)
+    for e2 in set(_BILD_EXT.values()):     # alte Bilddatei anderer Endung aufräumen
+        alt = BILDER_DIR / f'{cid}{e2}'
+        if e2 != ext and alt.exists():
+            try:
+                alt.unlink()
+            except OSError:
+                pass
+    for e in liste:
+        if e.get('id') == cid:
+            e['bild'] = name
+            e['bild_ts'] = datetime.now().strftime('%d.%m.%Y %H:%M')
+            break
+    _sichere(CONTENT_PATH, liste)
+
+
+def _bild_block(eintrag: dict, cid: str, gemini_aktiv: bool, hat_refs: bool) -> str:
+    bild = eintrag.get('bild')
+    vorschau = ''
+    if bild:
+        vorschau = (
+            f'<div style="margin:6px 0"><img src="/content/bild/{_esc(bild)}" alt="" '
+            'style="max-width:240px;border:1px solid var(--line);border-radius:8px;display:block">'
+            f'<div class="row" style="margin-top:4px"><a class="btn ghost" href="/content/bild/{_esc(bild)}" '
+            f'download>Bild herunterladen</a> <span class="hint" style="align-self:center">erstellt '
+            f'{_esc(eintrag.get("bild_ts") or "")}</span></div></div>')
+    if gemini_aktiv and hat_refs:
+        label = 'Bild neu erzeugen' if bild else 'Bild erzeugen (Nano Banana)'
+        steuer = (f'<form method="post" action="/content/{_esc(cid)}/bild" style="display:inline">'
+                  f'<button class="btn ghost" type="submit">{label}</button></form>')
+    else:
+        grund = 'GEMINI_API_KEY fehlt' if not gemini_aktiv else 'kein Referenzfoto hinterlegt'
+        steuer = f'<span class="hint">Bildgenerierung nicht möglich ({grund}).</span>'
+    return ('<div class="hint" style="margin:10px 0 2px">Instagram-Bild (aus dem Bild-Briefing)</div>'
+            + vorschau + f'<div class="row">{steuer}</div>')
 
 
 # ── Zugang (nur admin) ───────────────────────────────────────────────────────
@@ -643,6 +776,33 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
             '<button class="btn" type="submit">Bearbeitete Fassungen speichern</button></div></div>'
             '</form>')
 
+    # Referenzfotos-Karte (Basis für die Bilderzeugung)
+    gemini_aktiv = bool(os.environ.get('GEMINI_API_KEY'))
+    refs = _ref_liste()
+    hat_refs = bool(refs)
+    gem_badge = ('<span class="badge ok">&#10003; Gemini verbunden</span>' if gemini_aktiv else
+                 '<span class="badge warn">Kein <code>GEMINI_API_KEY</code> &ndash; Bildgenerierung aus</span>')
+    thumbs = ''.join(
+        '<div style="display:inline-block;text-align:center;margin:0 8px 8px 0">'
+        f'<img src="/content/referenz/{_esc(n)}" alt="" style="height:74px;width:74px;object-fit:cover;'
+        'border:1px solid var(--line);border-radius:8px;display:block">'
+        f'<form method="post" action="/content/referenz/{_esc(n)}/loeschen" style="margin-top:3px" '
+        'onsubmit="return confirm(\'Referenzfoto löschen?\')">'
+        '<button class="btn ghost" style="padding:2px 8px;font-size:11px" type="submit">entfernen</button>'
+        '</form></div>' for n in refs)
+    referenz_karte = (
+        '<div class="statusbox" style="margin-top:14px">'
+        '<div class="step"><span class="ttl">Referenzfotos (dein Gesicht)</span></div>'
+        f'<div class="row" style="margin:4px 0 6px">{gem_badge}</div>'
+        '<p class="hint" style="margin:0 0 8px">Basis für die Bilderzeugung mit Nano Banana. 1–3 klare '
+        'Fotos deines Gesichts genügen. Sie bleiben auf dem Server (nicht im Git) und verlassen ihn nur '
+        'beim Bild-Aufruf an Google.</p>'
+        + (f'<div style="margin-bottom:6px">{thumbs}</div>' if thumbs else
+           '<p class="hint" style="margin:0 0 8px">Noch keine Referenzfotos.</p>')
+        + '<form method="post" action="/content/referenz" enctype="multipart/form-data" class="row">'
+        '<input type="file" name="fotos" accept="image/*" multiple>'
+        '<button class="btn ghost" type="submit">Hochladen</button></form></div>')
+
     posts = _content_laden()
     archiv = ''
     if posts:
@@ -659,7 +819,9 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
                 f'<div class="row" style="margin:4px 0 8px">{_kopier_btn("al" + cid)}</div>'
                 '<div class="hint" style="margin:4px 0 2px">Instagram (inkl. Bild-Briefing)</div>'
                 f'<textarea id="ai{_esc(cid)}" rows="6" style="width:100%">{_esc(p.get("instagram") or "")}</textarea>'
-                f'<div class="row" style="margin-top:4px">{_kopier_btn("ai" + cid)} '
+                f'<div class="row" style="margin-top:4px">{_kopier_btn("ai" + cid)}</div>'
+                + _bild_block(p, cid, gemini_aktiv, hat_refs)
+                + '<div class="row" style="margin-top:10px">'
                 f'<form method="post" action="/content/{_esc(cid)}/loeschen" style="display:inline" '
                 'onsubmit="return confirm(\'Eintrag löschen?\')">'
                 '<button class="btn ghost" type="submit">Löschen</button></form></div></div>')
@@ -668,7 +830,7 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
 
     warn = (f'<div class="statusbox"><span class="badge warn">{hinweis}</span></div>' if hinweis else '')
     return (_platte('Content-Pipeline &ndash; Kurator &middot; Texter &middot; Prüfer, Freigabe durch dich')
-            + _subtabs('content') + kistat + warn + form + ergebnis + archiv)
+            + _subtabs('content') + kistat + warn + form + referenz_karte + ergebnis + archiv)
 
 
 def _startseite_html():
@@ -889,6 +1051,59 @@ async def content_vorlagen_speichern(request: Request):
     d = {k: (form.get(k) or '').strip() for k in ('kurator', 'texter', 'pruefer')}
     _sichere(CONTENT_SPEC_PATH, {k: v for k, v in d.items() if v})  # leer -> Standard
     return RedirectResponse('/content/vorlagen?ok=1', status_code=303)
+
+
+@app.post('/content/referenz')
+async def content_referenz_upload(request: Request):
+    form = await request.form()
+    for f in form.getlist('fotos'):
+        if not getattr(f, 'filename', ''):
+            continue
+        daten = await f.read()
+        if not daten:
+            continue
+        ext = os.path.splitext(f.filename)[1].lower()
+        if ext not in _BILD_SUFFIXE:
+            ext = '.jpg'
+        _sichere_bytes(REFS_DIR / (secrets.token_hex(6) + ext), daten)
+    return RedirectResponse('/content', status_code=303)
+
+
+@app.get('/content/referenz/{name}')
+def content_referenz_datei(request: Request, name: str):
+    p = REFS_DIR / _sicherer_name(name)
+    if p.is_file():
+        return FileResponse(str(p))
+    return RedirectResponse('/content', status_code=303)
+
+
+@app.post('/content/referenz/{name}/loeschen')
+def content_referenz_loeschen(request: Request, name: str):
+    p = REFS_DIR / _sicherer_name(name)
+    try:
+        if p.is_file():
+            p.unlink()
+    except OSError:
+        pass
+    return RedirectResponse('/content', status_code=303)
+
+
+@app.get('/content/bild/{name}')
+def content_bild_datei(request: Request, name: str):
+    p = BILDER_DIR / _sicherer_name(name)
+    if p.is_file():
+        return FileResponse(str(p))
+    return RedirectResponse('/content', status_code=303)
+
+
+@app.post('/content/{cid}/bild', response_class=HTMLResponse)
+async def content_bild_erzeugen(request: Request, cid: str):
+    try:
+        await run_in_threadpool(_bild_fuer_content, cid)
+    except Exception as e:  # noqa: BLE001
+        return HTMLResponse(_seite(_content_html(hinweis='Bild konnte nicht erzeugt werden: '
+                                                 + str(e)[:300]), request.state.user))
+    return RedirectResponse('/content', status_code=303)
 
 
 @app.post('/content/{cid}/loeschen')
