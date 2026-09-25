@@ -196,6 +196,18 @@ def _mit_profil(agent_prompt: str) -> str:
     return f'## Über die Person, für die du arbeitest\n{_profil()}\n\n---\n\n{agent_prompt}'
 
 
+def _kontext_default() -> bool:
+    """Merkt sich, ob der Wochenüberblick als Faktengrundlage genutzt werden soll (Standard: ja)."""
+    d = _lade(DATA_DIR / 'content_ui.json', None)
+    if isinstance(d, dict) and 'kontext' in d:
+        return bool(d['kontext'])
+    return True
+
+
+def _kontext_setzen(an: bool):
+    _sichere(DATA_DIR / 'content_ui.json', {'kontext': bool(an)})
+
+
 KURATOR_DEFAULT = (
     'Du bist der Themen-Kurator für die Person, die oben im Profil beschrieben ist.\n\n'
     'Aufgabe: Wähle aus dem Thema des Nutzers und der Faktengrundlage den EINEN stärksten, '
@@ -217,8 +229,9 @@ TEXTER_DEFAULT = (
     'Der LinkedIn-Beitrag (Post): ausgearbeitet und substanziell, ca. 180–320 Wörter. Ein starker '
     'Aufhänger (gern eine steile These), dann ein klar entwickelter Gedankengang mit einem KONKRETEN '
     'Beispiel aus dem Branchen-/Lieferantenalltag, eine zugespitzte Haltung/Pointe und ein pointierter '
-    'Abschluss ohne aufgesetzte Handlungsaufforderung. Absätze mit Luft. Am Ende maximal 5 passende, '
-    'spezifische, branchenbezogene Hashtags in einer eigenen Zeile.\n'
+    'Abschluss ohne aufgesetzte Handlungsaufforderung. Absätze mit Luft. Hashtags spielen kaum noch eine '
+    'Rolle: höchstens 0–3 sehr gezielte am Ende (oder gar keine), keine Hashtag-Wolke; relevante '
+    'Suchbegriffe lieber direkt in den Text.\n'
     '[NEWSLETTER]\n'
     'Der LinkedIn-Newsletter zum selben Thema, aus Lieferantensicht – länger und ausführlicher als der '
     'Post: erste Zeile „Titel:" mit einem prägnanten Titel, dann 300–600 Wörter Fließtext mit klarem '
@@ -226,13 +239,15 @@ TEXTER_DEFAULT = (
     'Abschluss, der einordnet statt zu werben), mit klarer, zugespitzter Haltung. Gleicher Ton, keine '
     'Emojis, keine Hashtags.\n'
     '[INSTAGRAM]\n'
-    'Die Instagram-Fassung, gleicher fachlicher Ton, ebenfalls keine Emojis: Hook in der ERSTEN Zeile '
-    '(vor dem „mehr anzeigen"), danach kurze, durch Leerzeilen getrennte Absätze, insgesamt kürzer als '
-    'LinkedIn. Darunter ein Hashtag-Block aus branchenbezogenen Hashtags (keine generischen '
-    'Motivations-Hashtags). GANZ am Ende eine eigene Zeile, die mit „Bild-Briefing:" beginnt und in 1–2 '
-    'Sätzen einen fertigen Bild-Prompt beschreibt – formuliert so, dass die Referenzperson (Jörn) im Bild '
-    'vorkommt (z. B. „Referenzperson im Lager vor Palettenware, …"), sachlich und markenpassend, keine '
-    'Effekthascherei.\n\n'
+    'Die Instagram-Fassung nach aktuellen Kriterien, gleicher fachlicher Ton, keine Emojis: eine starke '
+    'Hook in der ERSTEN Zeile (vor dem „mehr anzeigen"), sofort Mehrwert/Substanz, gut lesbar in kurzen '
+    'Zeilen und Absätzen mit Luft, insgesamt kürzer als LinkedIn, am Ende eine klare, unaufdringliche '
+    'Handlungsaufforderung (z. B. „speicher dir das" oder eine ehrliche Frage für die Kommentare). '
+    'Hashtags spielen kaum noch eine Rolle: HÖCHSTENS 3–5 sehr gezielte, spezifische Hashtags in einer '
+    'eigenen Zeile – oder ganz weglassen; relevante Suchbegriffe lieber direkt im Text. Keine '
+    'Hashtag-Wolken, keine generischen Hashtags. GANZ am Ende eine eigene Zeile, die mit „Bild-Briefing:" '
+    'beginnt und in 1–2 Sätzen einen fertigen Bild-Prompt beschreibt – so, dass die Referenzperson (Jörn) '
+    'im Bild vorkommt, sachlich und markenpassend.\n\n'
     'Gib ausschließlich die drei markierten Fassungen zurück – keine Vorrede, keine Meta-Kommentare.')
 
 PRUEFER_DEFAULT = (
@@ -249,7 +264,8 @@ PRUEFER_DEFAULT = (
     'Händler", unpassendes Framing zum stationären Handel; sowie rote Linien (Parteipolitik, Religion, '
     'persönliche/emotionale Angriffe). (3) Substanz & Haltung: Ist der Text ausgearbeitet und nimmt er '
     'eine klare, zugespitzte Haltung ein – oder ist er zu brav/dünn? (4) Hook-Stärke, Länge, Plattform-'
-    'Passung, Hashtags.\n'
+    'Passung; Hashtags sparsam (0–5 gezielte, keine Wolken) – kritisiere überflüssige oder generische '
+    'Hashtags.\n'
     'Schlage KEINE fertige Neufassung vor – nenne nur die konkreten Korrekturen. Schließe mit einer Zeile '
     '„Empfehlung: …" (freigeben / überarbeiten).')
 
@@ -1071,8 +1087,9 @@ def _linkedin_html(draft: str = '', thema: str = '', saved_id: str = '') -> str:
         '<textarea name="thema" rows="3" style="width:100%;margin-top:8px" '
         f'placeholder="z.B. PPWR ab 12.8. aus Lieferantensicht: wer trägt bei Dropshipping die Erzeugerpflicht?">{_esc(thema)}</textarea>'
         '<label style="display:flex;gap:8px;align-items:center;margin:8px 0;font-size:13px">'
-        '<input type="checkbox" name="kontext" value="1" checked style="width:16px;height:16px;min-width:0"> '
-        'Aktuellen Wochenüberblick als Faktengrundlage nutzen</label>'
+        f'<input type="checkbox" name="kontext" value="1"{" checked" if _kontext_default() else ""} '
+        'style="width:16px;height:16px;min-width:0"> '
+        'Aktuellen Wochenüberblick als Faktengrundlage nutzen (Auswahl bleibt gespeichert)</label>'
         f'<div class="row"><button class="btn" type="submit"{aktiv}>Entwurf erstellen</button></div>'
         '</form></div>')
 
@@ -1129,8 +1146,9 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
         '<textarea name="thema" rows="3" style="width:100%;margin-top:8px" '
         f'placeholder="z. B. PPWR aus Lieferantensicht bei Dropshipping – wer trägt die Erzeugerpflicht?">{_esc(thema)}</textarea>'
         '<label style="display:flex;gap:8px;align-items:center;margin:8px 0;font-size:13px">'
-        '<input type="checkbox" name="kontext" value="1" checked style="width:16px;height:16px;min-width:0"> '
-        'Aktuellen Wochenüberblick als Faktengrundlage nutzen</label>'
+        f'<input type="checkbox" name="kontext" value="1"{" checked" if _kontext_default() else ""} '
+        'style="width:16px;height:16px;min-width:0"> '
+        'Aktuellen Wochenüberblick als Faktengrundlage nutzen (Auswahl bleibt gespeichert)</label>'
         f'<div class="row"><button class="btn" type="submit"{aktiv}>Pipeline starten</button> '
         '<a class="btn ghost" href="/content/profil">Profil „Über mich"</a> '
         '<a class="btn ghost" href="/content/vorlagen">Agenten-Vorlagen</a></div>'
@@ -1537,6 +1555,7 @@ async def content_run(request: Request):
     form = await request.form()
     thema = (form.get('thema') or '').strip()
     kontext = form.get('kontext') == '1'
+    _kontext_setzen(kontext)                 # Auswahl merken (bleibt aus, wenn abgewählt)
     md = ''
     if kontext:
         bs = _lade(BRIEF_PATH, []) or []
