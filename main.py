@@ -34,6 +34,7 @@ DATA_DIR = Path(os.environ.get('BR_DATA_DIR', '/data'))
 BRIEF_PATH = DATA_DIR / 'briefings.json'
 SPEC_PATH = DATA_DIR / 'spec.json'
 STATUS_PATH = DATA_DIR / 'status.json'
+AUTOMATIK_PATH = DATA_DIR / 'automatik.json'
 LI_PATH = DATA_DIR / 'linkedin_posts.json'
 AUDIT_DB = DATA_DIR / 'audit.db'
 
@@ -324,11 +325,30 @@ def _run_generation(quelle='manuell'):
         _lock.release()
 
 
-# ── Automatik: jeden Montag 07:00 Europe/Berlin ──────────────────────────────
+# ── Automatik: jeden Montag 07:00 Europe/Berlin (per Schalter an/aus) ─────────
+def _automatik_an() -> bool:
+    """Ist der Montags-Automatiklauf aktiv? Standard = an (bisheriges Verhalten)."""
+    d = _lade(AUTOMATIK_PATH, None)
+    if isinstance(d, dict) and 'an' in d:
+        return bool(d['an'])
+    return True
+
+
+def _automatik_setzen(an: bool):
+    _sichere(AUTOMATIK_PATH, {'an': bool(an),
+                              'geaendert': datetime.now().isoformat(timespec='seconds')})
+
+
+def _automatik_lauf():
+    """Cron-Ziel: erzeugt nur, wenn die Automatik eingeschaltet ist."""
+    if _automatik_an():
+        _run_generation('automatik')
+
+
 try:
     from apscheduler.schedulers.background import BackgroundScheduler
     _sched = BackgroundScheduler(timezone='Europe/Berlin')
-    _sched.add_job(lambda: _run_generation('automatik'), 'cron',
+    _sched.add_job(_automatik_lauf, 'cron',
                    day_of_week='mon', hour=7, minute=0, id='montag',
                    misfire_grace_time=3600, coalesce=True)
     _sched.start()
@@ -445,6 +465,20 @@ def _startseite_html():
         kistat = ('<span class="badge warn">Kein <code>ANTHROPIC_API_KEY</code> &ndash; '
                   'Erstellung nicht möglich</span>')
 
+    auto_an = _automatik_an()
+    if auto_an:
+        auto_ctrl = (
+            '<span class="badge ok" style="align-self:center">&#10003; Automatik an &middot; Montag 07:00</span> '
+            '<form method="post" action="/automatik" style="display:inline">'
+            '<input type="hidden" name="an" value="0">'
+            '<button class="btn ghost" type="submit">Automatik ausschalten</button></form>')
+    else:
+        auto_ctrl = (
+            '<span class="badge off" style="align-self:center">Automatik aus &middot; kein Montagslauf</span> '
+            '<form method="post" action="/automatik" style="display:inline">'
+            '<input type="hidden" name="an" value="1">'
+            '<button class="btn" type="submit">Automatik einschalten</button></form>')
+
     laeuft = st.get('status') == 'laeuft'
     if laeuft:
         seit = (st.get('seit') or '').replace('T', ' ')[:16]
@@ -474,7 +508,7 @@ def _startseite_html():
             + banner
             + f'<div class="row" style="margin-top:14px">{btn} '
             '<a class="btn ghost" href="/einstellungen">Vorlage bearbeiten</a> '
-            '<span class="hint" style="align-self:center">Automatik: Montag 07:00 Uhr</span></div>')
+            + auto_ctrl + '</div>')
 
     if briefings:
         neu = briefings[0]
@@ -505,6 +539,13 @@ def start(request: Request):
 def erstellen(request: Request):
     if not _lock.locked():
         threading.Thread(target=_run_generation, args=('manuell',), daemon=True).start()
+    return RedirectResponse('/', status_code=303)
+
+
+@app.post('/automatik')
+async def automatik_umschalten(request: Request):
+    form = await request.form()
+    _automatik_setzen((form.get('an') or '') == '1')
     return RedirectResponse('/', status_code=303)
 
 
