@@ -237,15 +237,17 @@ PRUEFER_DEFAULT = (
 BILDPROMPT_DEFAULT = (
     'Du bist Bild-Prompt-Designer für die Instagram-Bilder der Person aus dem Profil oben.\n\n'
     'Aus dem Beitrag baust du EINEN fertigen Bild-Prompt für Googles Bildmodell (Nano Banana / Gemini).\n'
+    'Stil: erzählerisch und dynamisch – die Referenzperson (Jörn) MITTEN in einer echten Handlung zum '
+    'Thema, ein eingefangener Moment, nicht gestellt und nicht statisch. Zum Beispiel: prüft/packt Ware '
+    'im Möbellager, geht zwischen Palettenreihen, am Packtisch, im Versandbereich, im Gespräch mit dem '
+    'Team – nah dran, mit Bewegung und Blick fürs Detail.\n'
     'Regeln:\n'
-    '- Die abgebildete Person ist die Referenzperson (Jörn) – setze sie in eine glaubwürdige, zum Thema '
-    'passende Business-Situation (z. B. im Möbellager vor Palettenware, an einem Packtisch, im '
-    'Versandbereich). Kein Model-/Werbe-Look, seriös und sachlich.\n'
-    '- Beschreibe konkret: Szene und Umgebung, Handlung der Person, Bildausschnitt/Perspektive, '
-    'Licht und Stimmung (natürlich, professionell), fotorealistischer Stil.\n'
-    '- Instagram-Hochformat (4:5). KEIN Text im Bild, keine Logos, keine Schrift, keine Collage, keine '
-    'Effekthascherei.\n'
-    '- Nutze nur, was zum Thema passt; erfinde keine Marken.\n'
+    '- Wahre Gesicht und Identität der Referenzperson genau.\n'
+    '- Beschreibe konkret: die Handlung/Szene und den Moment, Bildausschnitt und Perspektive (gern nah, '
+    'aus der Szene heraus, auch mal leicht schräg), Licht und Stimmung (natürlich, kraftvoll, mit Tiefe/'
+    'Gegenlicht), fotorealistisch und glaubwürdig – lebendig statt steifer Studio-/Standard-Business-Look.\n'
+    '- Instagram-Hochformat (4:5). KEIN Text im Bild, keine Logos, keine Schrift, keine Collage.\n'
+    '- Nutze nur, was zum Thema passt; erfinde keine Marken; nicht ins Werbliche kippen.\n'
     'Gib AUSSCHLIESSLICH den fertigen Bild-Prompt als Fließtext zurück (2–4 Sätze) – keine Überschrift, '
     'keine Erklärung, keine Varianten.')
 
@@ -427,10 +429,11 @@ def _erzeuge_bild(prompt: str, ref_paths):
     from google.genai import types
     client = genai.Client(api_key=key)
 
-    voll = ('Erstelle ein fotorealistisches, markenpassendes Bild für einen Business-Instagram-Post. '
+    voll = ('Erstelle ein fotorealistisches Bild für einen Instagram-Post – ein erzählerischer, '
+            'dynamischer Moment mitten im Geschehen, kein gestelltes Standard-Business-Foto. '
             'Die abgebildete Person ist die Referenzperson aus den beigefügten Fotos – wahre ihr Gesicht '
-            'und ihre Identität möglichst genau. Kein Text im Bild, keine Logos, seriös und sachlich, keine '
-            'Effekthascherei. Motiv: ' + (prompt or '').strip())
+            'und ihre Identität möglichst genau. Kein Text im Bild, keine Logos. Motiv: '
+            + (prompt or '').strip())
     contents = [voll]
     for rp in ref_paths:
         try:
