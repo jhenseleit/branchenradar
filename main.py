@@ -243,10 +243,12 @@ BILDPROMPT_DEFAULT = (
     'Du bist Bild-Prompt-Designer für die LinkedIn-/Instagram-Bilder der Person aus dem Profil oben.\n\n'
     'Aus dem Beitrag baust du EINEN fertigen Bild-Prompt für Googles Bildmodell (Nano Banana / Gemini).\n'
     'Immer gilt: ein hochwertiges, professionelles Foto der Referenzperson (Jörn) – souverän, sympathisch '
-    'und gepflegt, hell und vorteilhaft beleuchtet, gestochen scharf, Premium-Qualität; die Person '
-    'präsent und meist der Kamera zugewandt. KEIN düsterer, körniger oder dokumentarischer Look, KEINE '
-    'Bewegungsunschärfe, kein Staub. Wahre Gesicht und Identität genau (gepflegter kurzer Bart, klare '
-    'runde Brille, gepflegtes Erscheinungsbild).\n\n'
+    'und gepflegt, hell und vorteilhaft beleuchtet, gestochen scharf, Premium-Qualität. Die Person wirkt '
+    'LOCKER und NATÜRLICH – entspannte Körperhaltung, offener, sympathischer Ausdruck (gern ein leichtes '
+    'Lächeln), NICHT steif oder verkrampft-gestellt; sie darf auch mal seitlich, in Bewegung oder im Tun '
+    'sein statt nur starr in die Kamera zu blicken. KEIN düsterer, körniger oder dokumentarischer Look. '
+    'Wahre Gesicht und Identität genau (gepflegter kurzer Bart, klare runde Brille, gepflegtes '
+    'Erscheinungsbild).\n\n'
     'WICHTIG – Themenbezug: Die Szene MUSS den Kern des Themas/Beitrags sichtbar aufgreifen (durch '
     'Handlung, Umgebung oder passende Requisiten, die zum konkreten Beitrag passen) und darf NIE ein '
     'beliebiges, themenfremdes Porträt oder ein halb leeres Bild sein. Das Bild soll sowohl im LinkedIn- '
@@ -650,6 +652,51 @@ def _bild_fuer_content(cid: str):
     _sichere(CONTENT_PATH, liste)
 
 
+def _varianten_prompts(brief: str, instagram: str, anzahl: int = 3):
+    """Lässt den Bild-Agenten GENAU `anzahl` Prompts zum selben Thema in unterschiedlichen Umgebungen bauen."""
+    p = _content_prompts()
+    user = (f'Wetter-Kontext (für ein aktuelles, wetterpassendes Outfit):\n{_wetter_kontext()}\n\n'
+            f'Erzeuge AUSNAHMSWEISE GENAU {anzahl} unterschiedliche Bild-Prompts zum SELBEN Thema, jeweils '
+            'in einer deutlich ANDEREN, aber passenden Umgebung (variiere den Ort klar; kein Wiederholen '
+            'derselben Szene). Trenne die Prompts durch eine eigene Zeile, die nur "---" enthält – sonst '
+            'keinen weiteren Text.\n\n'
+            f'Thema/Briefing:\n\n{brief}\n\nInstagram-Fassung:\n{instagram}')
+    text = _ki_text(_mit_profil(p['bildprompt']), user, 1800)
+    teile = [t.strip() for t in re.split(r'(?m)^\s*-{3,}\s*$', text) if t.strip()]
+    return teile[:anzahl]
+
+
+def _bilder_set_erzeugen(cid: str, anzahl: int = 3):
+    """Erzeugt mehrere Bild-Varianten (verschiedene Umgebungen) für einen Eintrag zur Auswahl."""
+    liste = _content_laden()
+    eintrag = next((e for e in liste if e.get('id') == cid), None)
+    if not eintrag:
+        raise RuntimeError('Eintrag nicht gefunden.')
+    prompts = _varianten_prompts(eintrag.get('brief') or '', eintrag.get('instagram') or '', anzahl)
+    if not prompts:
+        prompts = [(eintrag.get('bildprompt') or '').strip() or _bild_briefing(eintrag.get('instagram') or '')]
+    refs = [str(REFS_DIR / n) for n in _ref_liste()]
+    stil = [str(STIL_DIR / n) for n in _stil_liste()]
+    for alt in (eintrag.get('varianten') or []):        # alte Varianten-Dateien aufräumen
+        try:
+            (BILDER_DIR / _sicherer_name(alt.get('name', ''))).unlink()
+        except OSError:
+            pass
+    ts = datetime.now().strftime('%d.%m.%Y %H:%M')
+    varianten = []
+    for i, pr in enumerate(prompts):
+        daten, _m = _erzeuge_bild(pr, refs, stil)
+        daten = _wasserzeichen(daten)
+        name = f'{cid}_v{i + 1}.png'
+        _sichere_bytes(BILDER_DIR / name, daten)
+        varianten.append({'name': name, 'prompt': pr, 'ts': ts})
+    for e in liste:
+        if e.get('id') == cid:
+            e['varianten'] = varianten
+            _sichere(CONTENT_PATH, liste)
+            break
+
+
 def _bild_block(eintrag: dict, cid: str, gemini_aktiv: bool, hat_refs: bool) -> str:
     bild = eintrag.get('bild')
     prompt = (eintrag.get('bildprompt') or '').strip() or _bild_briefing(eintrag.get('instagram') or '')
@@ -664,19 +711,39 @@ def _bild_block(eintrag: dict, cid: str, gemini_aktiv: bool, hat_refs: bool) -> 
     if gemini_aktiv and hat_refs:
         label = 'Bild neu erzeugen' if bild else 'Bild erzeugen (Nano Banana)'
         erzeugen = (f'<button class="btn ghost" type="submit" formaction="/content/{_esc(cid)}/bild">'
-                    f'{label}</button>')
+                    f'{label}</button>'
+                    f'<button class="btn ghost" type="submit" formaction="/content/{_esc(cid)}/bilder3">'
+                    '3 Varianten (verschiedene Umgebungen)</button>')
     else:
         grund = 'GEMINI_API_KEY fehlt' if not gemini_aktiv else 'kein Referenzfoto hinterlegt'
         erzeugen = f'<span class="hint" style="align-self:center">Bildgenerierung nicht möglich ({grund}).</span>'
+
+    # Varianten-Auswahl (3 verschiedene Umgebungen) anzeigen
+    varianten = eintrag.get('varianten') or []
+    var_html = ''
+    if varianten:
+        kacheln = ''
+        for v in varianten:
+            n = v.get('name') or ''
+            kacheln += (
+                '<div style="display:inline-block;vertical-align:top;margin:0 10px 10px 0;max-width:220px">'
+                f'<img src="/content/bild/{_esc(n)}" alt="" style="width:220px;border:1px solid var(--line);'
+                'border-radius:8px;display:block">'
+                f'<div class="row" style="margin-top:3px"><a class="btn ghost" href="/content/bild/{_esc(n)}" '
+                'download>herunterladen</a></div></div>')
+        var_html = ('<div class="hint" style="margin:12px 0 4px">Zur Auswahl &middot; 3 Varianten in '
+                    'verschiedenen Umgebungen (lade dir die beste herunter)</div>'
+                    f'<div>{kacheln}</div>')
+
     # EIN Formular: „Bild erzeugen" nimmt genau den Text aus dem Feld (kein Prompt-Verlust mehr).
-    return ('<div class="hint" style="margin:12px 0 2px">Instagram-Bild</div>' + vorschau
+    return ('<div class="hint" style="margin:12px 0 2px">Bild (LinkedIn &amp; Instagram)</div>' + vorschau
             + '<div class="hint" style="margin:6px 0 2px">Bild-Prompt (KI-Vorschlag &ndash; editierbar; '
             '„Bild erzeugen" verwendet genau diesen Text)</div>'
             f'<form method="post" action="/content/{_esc(cid)}/bildprompt">'
             f'<textarea name="bildprompt" rows="4" style="width:100%">{_esc(prompt)}</textarea>'
             '<div class="row" style="margin-top:6px">'
             '<button class="btn ghost" type="submit">Prompt speichern</button>'
-            + erzeugen + '</div></form>')
+            + erzeugen + '</div></form>' + var_html)
 
 
 # ── Zugang (nur admin) ───────────────────────────────────────────────────────
@@ -1654,6 +1721,16 @@ async def content_bildprompt_speichern(request: Request, cid: str):
             e['bildprompt'] = txt
             _sichere(CONTENT_PATH, liste)
             break
+    return RedirectResponse('/content', status_code=303)
+
+
+@app.post('/content/{cid}/bilder3', response_class=HTMLResponse)
+async def content_bilder3(request: Request, cid: str):
+    try:
+        await run_in_threadpool(_bilder_set_erzeugen, cid, 3)
+    except Exception as e:  # noqa: BLE001
+        return HTMLResponse(_seite(_content_html(hinweis='Varianten konnten nicht erzeugt werden: '
+                                                 + str(e)[:300]), request.state.user))
     return RedirectResponse('/content', status_code=303)
 
 
