@@ -38,6 +38,7 @@ AUTOMATIK_PATH = DATA_DIR / 'automatik.json'
 LI_PATH = DATA_DIR / 'linkedin_posts.json'
 CONTENT_PATH = DATA_DIR / 'content_posts.json'
 CONTENT_SPEC_PATH = DATA_DIR / 'content_prompts.json'
+PROFIL_PATH = DATA_DIR / 'profil.json'          # zentrales „Über mich" für alle Content-Agenten
 REFS_DIR = DATA_DIR / 'refs'        # Referenzfotos (Gesicht) – bleiben auf dem Volume
 BILDER_DIR = DATA_DIR / 'bilder'    # erzeugte Instagram-Bilder
 AUDIT_DB = DATA_DIR / 'audit.db'
@@ -136,19 +137,29 @@ def _erzeuge_linkedin(thema: str, kontext_md: str = '') -> str:
     if kontext_md:
         user += ('\nFaktengrundlage (aktueller Branchenüberblick – nutze nur belegte Zahlen '
                  'mit Quelle, wenn sie zum Thema passen):\n\n' + kontext_md)
-    with client.messages.stream(model=MODELL, max_tokens=8000, system=LINKEDIN_SYS,
+    with client.messages.stream(model=MODELL, max_tokens=8000, system=_mit_profil(LINKEDIN_SYS),
                                 messages=[{'role': 'user', 'content': user}]) as stream:
         resp = stream.get_final_message()
     return ''.join(getattr(b, 'text', '') for b in resp.content
                    if getattr(b, 'type', None) == 'text').strip()
 
 
-# ── Content-Pipeline: 3 Agenten (Kurator · Texter · Prüfer) ──────────────────
-# Gemeinsame Persona/Tonregeln, damit alle drei Prompts denselben Rahmen haben.
-_PERSONA = ('Jörn Henseleit, Vertriebsleiter der Skyport GmbH – B2B-Möbelgroßhandel, reiner Onliner '
-            '(Dropshipping, 24-Stunden-Versand, über 1.300 Artikel; Kunden auch in der Schweiz, Norwegen '
-            'und UK; Skyport verkauft daneben auch selbst an Endkunden). Er schreibt aus Lieferantensicht '
-            'über Verlässlichkeit, Verfügbarkeit, Produktdatenqualität und Lieferzeit.')
+# ── Content-Pipeline: Agenten + zentrales Profil „Über mich" ─────────────────
+# Ein editierbares Profil ist die gemeinsame Wissensbasis ALLER Content-Agenten;
+# es wird ihrem System-Prompt vorangestellt. So pflegt der Nutzer sich an EINER
+# Stelle statt in jedem einzelnen Prompt.
+PROFIL_DEFAULT = (
+    'Jörn Henseleit, Vertriebsleiter bei der Skyport GmbH.\n\n'
+    'Skyport ist B2B-Großhandel für Möbel und reiner Onliner: Dropshipping, 24-Stunden-Versand, über '
+    '1.300 Artikel, die ein Händler ohne Kapitalbindung listen kann. Lieferung per Paketdienst, bei '
+    'Speditionsversand frei Bordsteinkante. Kunden auch in der Schweiz, Norwegen und UK. Skyport verkauft '
+    'daneben auch selbst an Endkunden – kein Widerspruch; behaupte nie, Skyport verkaufe ausschließlich '
+    'über Händler.\n\n'
+    'Auf LinkedIn schreibe ich aus Lieferantensicht über Verlässlichkeit, Verfügbarkeit, '
+    'Produktdatenqualität und Lieferzeit. Keine Motivationsinhalte, keine Beratersprache.\n\n'
+    '— Dieses Profil ist die gemeinsame Grundlage aller Content-Agenten. Ergänze es gern: konkrete '
+    'Zahlen/Fakten zu Skyport, deine Kernthemen und Haltung, was du bewusst NICHT sagst, 1–2 Stilproben '
+    'aus echten Beiträgen.')
 
 _TONREGELN = ('Kein Berater- oder Motivationssprech, keine Floskeln, keine Emojis, keine Dreierfiguren als '
               'Stilmittel, nicht werblich, unbequeme Befunde nicht abmildern. Ungleich lange Sätze, '
@@ -157,8 +168,21 @@ _TONREGELN = ('Kein Berater- oder Motivationssprech, keine Floskeln, keine Emoji
               'Konzept, aber auch nicht dagegen schießen. Nutze nur belegte Zahlen aus der Faktengrundlage '
               'und nenne die Quelle knapp; erfinde keine Zahlen.')
 
+
+def _profil() -> str:
+    d = _lade(PROFIL_PATH, None)
+    if isinstance(d, dict) and (d.get('text') or '').strip():
+        return d['text']
+    return PROFIL_DEFAULT
+
+
+def _mit_profil(agent_prompt: str) -> str:
+    """Stellt das zentrale Profil jedem Agenten-System-Prompt voran."""
+    return f'## Über die Person, für die du arbeitest\n{_profil()}\n\n---\n\n{agent_prompt}'
+
+
 KURATOR_DEFAULT = (
-    f'Du bist der Themen-Kurator für {_PERSONA}\n\n'
+    'Du bist der Themen-Kurator für die Person, die oben im Profil beschrieben ist.\n\n'
     'Aufgabe: Wähle aus dem Thema des Nutzers und der Faktengrundlage den EINEN stärksten, '
     'posting-würdigen Aufhänger für diese Woche (bei leerem Thema wählst du selbst). Gib ein knappes '
     'Briefing zurück – KEINE ausformulierten Beiträge:\n'
@@ -170,7 +194,7 @@ KURATOR_DEFAULT = (
     'ohne erfundene Zahlen vor. Gib nur das Briefing als Markdown zurück.')
 
 TEXTER_DEFAULT = (
-    f'Du schreibst fertige Social-Media-Beiträge für {_PERSONA}\n\n'
+    'Du schreibst fertige Social-Media-Beiträge für die Person aus dem Profil oben.\n\n'
     f'Tonregeln für BEIDE Kanäle: {_TONREGELN}\n\n'
     'Erzeuge aus dem Briefing zwei Fassungen desselben Themas und trenne sie EXAKT mit diesen '
     'Markierungen, jeweils in einer eigenen Zeile:\n'
@@ -189,7 +213,7 @@ TEXTER_DEFAULT = (
     'Gib ausschließlich die zwei markierten Fassungen zurück – keine Vorrede, keine Meta-Kommentare.')
 
 PRUEFER_DEFAULT = (
-    f'Du bist der kritische Lektor und Faktenprüfer für die Beiträge von {_PERSONA}\n\n'
+    'Du bist der kritische Lektor und Faktenprüfer für die Beiträge der Person aus dem Profil oben.\n\n'
     f'Prüfe die beiden Entwürfe streng gegen die Faktengrundlage und die Tonregeln: {_TONREGELN}\n\n'
     'Gib einen knappen Prüfbericht als Markdown zurück:\n'
     '- **LinkedIn – Ampel:** Grün/Gelb/Rot, mit den konkreten Fundstellen.\n'
@@ -202,7 +226,7 @@ PRUEFER_DEFAULT = (
     '„Empfehlung: …" (freigeben / überarbeiten).')
 
 BILDPROMPT_DEFAULT = (
-    f'Du bist Bild-Prompt-Designer für die Instagram-Bilder von {_PERSONA}\n\n'
+    'Du bist Bild-Prompt-Designer für die Instagram-Bilder der Person aus dem Profil oben.\n\n'
     'Aus dem Beitrag baust du EINEN fertigen Bild-Prompt für Googles Bildmodell (Nano Banana / Gemini).\n'
     'Regeln:\n'
     '- Die abgebildete Person ist die Referenzperson (Jörn) – setze sie in eine glaubwürdige, zum Thema '
@@ -256,16 +280,16 @@ def _content_pipeline(thema: str, kontext_md: str = '') -> dict:
                                   'erfinde keine Zahlen.)')
     thema_txt = thema.strip() or '(Kein Thema vorgegeben – wähle den stärksten Aufhänger aus der Faktengrundlage.)'
 
-    brief = _ki_text(p['kurator'],
+    brief = _ki_text(_mit_profil(p['kurator']),
                      f'Thema/Aufhänger vom Nutzer:\n{thema_txt}\n\n'
                      f'Faktengrundlage (aktueller Branchenüberblick):\n\n{fakt}', 2000)
-    doppel = _ki_text(p['texter'],
+    doppel = _ki_text(_mit_profil(p['texter']),
                       f'Briefing:\n\n{brief}\n\nFaktengrundlage:\n\n{fakt}', 3000)
     linkedin, instagram = _split_kanal(doppel)
-    pruef = _ki_text(p['pruefer'],
+    pruef = _ki_text(_mit_profil(p['pruefer']),
                      f'Faktengrundlage:\n\n{fakt}\n\n'
                      f'LinkedIn-Entwurf:\n{linkedin}\n\nInstagram-Entwurf:\n{instagram}', 2000)
-    bildprompt = _ki_text(p['bildprompt'],
+    bildprompt = _ki_text(_mit_profil(p['bildprompt']),
                           f'Thema/Briefing:\n\n{brief}\n\nInstagram-Fassung:\n{instagram}', 800)
     return {'brief': brief, 'linkedin': linkedin, 'instagram': instagram,
             'pruef': pruef, 'bildprompt': bildprompt}
@@ -772,7 +796,8 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
         '<input type="checkbox" name="kontext" value="1" checked style="width:16px;height:16px;min-width:0"> '
         'Aktuellen Wochenüberblick als Faktengrundlage nutzen</label>'
         f'<div class="row"><button class="btn" type="submit"{aktiv}>Pipeline starten</button> '
-        '<a class="btn ghost" href="/content/vorlagen">Agenten-Vorlagen bearbeiten</a></div>'
+        '<a class="btn ghost" href="/content/profil">Profil „Über mich"</a> '
+        '<a class="btn ghost" href="/content/vorlagen">Agenten-Vorlagen</a></div>'
         '<p class="hint" style="margin:8px 0 0">Dauert ~1 Minute (drei Modelldurchläufe). Für Bilder '
         'liefert die Instagram-Fassung ein fertiges Bild-Briefing (Nano Banana / Gemini).</p>'
         '</form></div>')
@@ -1078,6 +1103,37 @@ async def content_vorlagen_speichern(request: Request):
     d = {k: (form.get(k) or '').strip() for k in ('kurator', 'texter', 'pruefer', 'bildprompt')}
     _sichere(CONTENT_SPEC_PATH, {k: v for k, v in d.items() if v})  # leer -> Standard
     return RedirectResponse('/content/vorlagen?ok=1', status_code=303)
+
+
+@app.get('/content/profil', response_class=HTMLResponse)
+def content_profil(request: Request, ok: str = '', reset: str = ''):
+    if reset:
+        _sichere(PROFIL_PATH, {})
+        return RedirectResponse('/content/profil?ok=1', status_code=303)
+    hinweis = '<p class="msg-ok">Profil gespeichert.</p>' if ok else ''
+    inhalt = (_platte('Profil „Über mich" &ndash; gemeinsame Grundlage aller Content-Agenten')
+              + '<p style="margin-top:12px"><a href="/content">&larr; Zur Content-Pipeline</a></p>'
+              + hinweis
+              + '<p class="hint">Dieser Text wird jedem Agenten (Kurator, Texter, Prüfer, Bild-Prompt) und '
+              'dem LinkedIn-Entwurf vorangestellt. Je konkreter (Zahlen und Fakten zu Skyport, deine '
+              'Kernthemen und Haltung, was du bewusst NICHT sagst, 1–2 Stilproben aus echten Beiträgen), '
+              'desto besser treffen die Ergebnisse. Leer speichern = eingebauter Standard.</p>'
+              '<form method="post" action="/content/profil">'
+              f'<textarea name="text" rows="20" style="width:100%;font-size:13px">{_esc(_profil())}</textarea>'
+              '<div class="row" style="margin-top:10px">'
+              '<button class="btn" type="submit">Speichern</button> '
+              '<a class="btn ghost" href="/content/profil?reset=1">Auf Standard zurücksetzen</a>'
+              '</div></form>')
+    return HTMLResponse(_seite(inhalt, request.state.user))
+
+
+@app.post('/content/profil')
+async def content_profil_speichern(request: Request):
+    form = await request.form()
+    text = (form.get('text') or '').strip()
+    _sichere(PROFIL_PATH, {'text': text, 'geaendert': datetime.now().isoformat(timespec='seconds')}
+             if text else {})
+    return RedirectResponse('/content/profil?ok=1', status_code=303)
 
 
 @app.post('/content/referenz')
