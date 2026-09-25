@@ -36,6 +36,8 @@ SPEC_PATH = DATA_DIR / 'spec.json'
 STATUS_PATH = DATA_DIR / 'status.json'
 AUTOMATIK_PATH = DATA_DIR / 'automatik.json'
 LI_PATH = DATA_DIR / 'linkedin_posts.json'
+CONTENT_PATH = DATA_DIR / 'content_posts.json'
+CONTENT_SPEC_PATH = DATA_DIR / 'content_prompts.json'
 AUDIT_DB = DATA_DIR / 'audit.db'
 
 MODELL = os.environ.get('BRANCHENRADAR_MODELL', 'claude-opus-5')
@@ -134,6 +136,141 @@ def _erzeuge_linkedin(thema: str, kontext_md: str = '') -> str:
         resp = stream.get_final_message()
     return ''.join(getattr(b, 'text', '') for b in resp.content
                    if getattr(b, 'type', None) == 'text').strip()
+
+
+# ── Content-Pipeline: 3 Agenten (Kurator · Texter · Prüfer) ──────────────────
+# Gemeinsame Persona/Tonregeln, damit alle drei Prompts denselben Rahmen haben.
+_PERSONA = ('Jörn Henseleit, Vertriebsleiter der Skyport GmbH – B2B-Möbelgroßhandel, reiner Onliner '
+            '(Dropshipping, 24-Stunden-Versand, über 1.300 Artikel; Kunden auch in der Schweiz, Norwegen '
+            'und UK; Skyport verkauft daneben auch selbst an Endkunden). Er schreibt aus Lieferantensicht '
+            'über Verlässlichkeit, Verfügbarkeit, Produktdatenqualität und Lieferzeit.')
+
+_TONREGELN = ('Kein Berater- oder Motivationssprech, keine Floskeln, keine Emojis, keine Dreierfiguren als '
+              'Stilmittel, nicht werblich, unbequeme Befunde nicht abmildern. Ungleich lange Sätze, '
+              'gesprochenes Register, wie ein Kollege, der die Branche kennt und wenig Zeit hat. Behaupte '
+              'nie, Skyport verkaufe ausschließlich über Händler. Kein Lob auf den stationären Handel als '
+              'Konzept, aber auch nicht dagegen schießen. Nutze nur belegte Zahlen aus der Faktengrundlage '
+              'und nenne die Quelle knapp; erfinde keine Zahlen.')
+
+KURATOR_DEFAULT = (
+    f'Du bist der Themen-Kurator für {_PERSONA}\n\n'
+    'Aufgabe: Wähle aus dem Thema des Nutzers und der Faktengrundlage den EINEN stärksten, '
+    'posting-würdigen Aufhänger für diese Woche (bei leerem Thema wählst du selbst). Gib ein knappes '
+    'Briefing zurück – KEINE ausformulierten Beiträge:\n'
+    '- **Hook:** ein Satz.\n'
+    '- **Kerngedanke:** 2–3 Sätze aus Lieferantensicht.\n'
+    '- **Fakten & Quellen:** nur belegte Zahlen/Aussagen aus der Faktengrundlage, je mit Quelle.\n'
+    '- **Warum jetzt:** ein Satz zur Relevanz.\n'
+    'Wenn keine belegte Zahl zum Thema passt, sag das offen und schlage einen tragfähigen Blickwinkel '
+    'ohne erfundene Zahlen vor. Gib nur das Briefing als Markdown zurück.')
+
+TEXTER_DEFAULT = (
+    f'Du schreibst fertige Social-Media-Beiträge für {_PERSONA}\n\n'
+    f'Tonregeln für BEIDE Kanäle: {_TONREGELN}\n\n'
+    'Erzeuge aus dem Briefing zwei Fassungen desselben Themas und trenne sie EXAKT mit diesen '
+    'Markierungen, jeweils in einer eigenen Zeile:\n'
+    '[LINKEDIN]\n'
+    'Der LinkedIn-Beitrag: 120–220 Wörter, ein klarer Aufhänger, ein Kerngedanke, ein konkreter '
+    'Abschluss ohne aufgesetzte Handlungsaufforderung. Am Ende maximal 5 passende, spezifische, '
+    'branchenbezogene Hashtags in einer eigenen Zeile.\n'
+    '[INSTAGRAM]\n'
+    'Die Instagram-Fassung, gleicher fachlicher Ton, ebenfalls keine Emojis: Hook in der ERSTEN Zeile '
+    '(vor dem „mehr anzeigen"), danach kurze, durch Leerzeilen getrennte Absätze, insgesamt kürzer als '
+    'LinkedIn. Darunter ein Hashtag-Block aus branchenbezogenen Hashtags (keine generischen '
+    'Motivations-Hashtags). GANZ am Ende eine eigene Zeile, die mit „Bild-Briefing:" beginnt und in 1–2 '
+    'Sätzen einen fertigen Bild-Prompt beschreibt – formuliert so, dass die Referenzperson (Jörn) im Bild '
+    'vorkommt (z. B. „Referenzperson im Lager vor Palettenware, …"), sachlich und markenpassend, keine '
+    'Effekthascherei.\n\n'
+    'Gib ausschließlich die zwei markierten Fassungen zurück – keine Vorrede, keine Meta-Kommentare.')
+
+PRUEFER_DEFAULT = (
+    f'Du bist der kritische Lektor und Faktenprüfer für die Beiträge von {_PERSONA}\n\n'
+    f'Prüfe die beiden Entwürfe streng gegen die Faktengrundlage und die Tonregeln: {_TONREGELN}\n\n'
+    'Gib einen knappen Prüfbericht als Markdown zurück:\n'
+    '- **LinkedIn – Ampel:** Grün/Gelb/Rot, mit den konkreten Fundstellen.\n'
+    '- **Instagram – Ampel:** Grün/Gelb/Rot, mit den konkreten Fundstellen.\n\n'
+    'Prüfkriterien: (1) Jede Zahl/Behauptung im Entwurf muss in der Faktengrundlage mit Quelle stehen – '
+    'markiere alles Unbelegte. (2) Tonverstöße: Emojis, Floskeln, Beratersprech, Dreierfiguren, die '
+    'Aussage „ausschließlich über Händler", unpassendes Framing zum stationären Handel. (3) Hook-Stärke, '
+    'Länge, Plattform-Passung. (4) Hashtags passend und branchenbezogen.\n'
+    'Schlage KEINE fertige Neufassung vor – nenne nur die konkreten Korrekturen. Schließe mit einer Zeile '
+    '„Empfehlung: …" (freigeben / überarbeiten).')
+
+
+def _content_prompts() -> dict:
+    d = _lade(CONTENT_SPEC_PATH, None)
+    if not isinstance(d, dict):
+        d = {}
+    return {'kurator': d.get('kurator') or KURATOR_DEFAULT,
+            'texter': d.get('texter') or TEXTER_DEFAULT,
+            'pruefer': d.get('pruefer') or PRUEFER_DEFAULT}
+
+
+def _ki_text(system: str, user: str, max_tokens: int = 4000) -> str:
+    key = os.environ.get('ANTHROPIC_API_KEY')
+    if not key:
+        raise RuntimeError('ANTHROPIC_API_KEY ist nicht gesetzt.')
+    from anthropic import Anthropic
+    client = Anthropic(api_key=key)
+    resp = client.messages.create(model=MODELL, max_tokens=max_tokens, system=system,
+                                  messages=[{'role': 'user', 'content': user}])
+    return ''.join(getattr(b, 'text', '') for b in resp.content
+                   if getattr(b, 'type', None) == 'text').strip()
+
+
+def _split_kanal(text: str):
+    """Zerlegt die Texter-Ausgabe an [LINKEDIN]/[INSTAGRAM] in zwei Fassungen."""
+    li, ig = text, ''
+    if '[INSTAGRAM]' in text:
+        li, ig = text.split('[INSTAGRAM]', 1)
+    li = li.replace('[LINKEDIN]', '').strip()
+    ig = ig.strip()
+    return li, ig
+
+
+def _content_pipeline(thema: str, kontext_md: str = '') -> dict:
+    """Drei verkettete Agenten: Kurator -> Texter -> Prüfer. Reine Text-Ausgaben."""
+    p = _content_prompts()
+    fakt = kontext_md.strip() or ('(Keine Faktengrundlage übergeben – arbeite nur mit dem Thema und '
+                                  'erfinde keine Zahlen.)')
+    thema_txt = thema.strip() or '(Kein Thema vorgegeben – wähle den stärksten Aufhänger aus der Faktengrundlage.)'
+
+    brief = _ki_text(p['kurator'],
+                     f'Thema/Aufhänger vom Nutzer:\n{thema_txt}\n\n'
+                     f'Faktengrundlage (aktueller Branchenüberblick):\n\n{fakt}', 2000)
+    doppel = _ki_text(p['texter'],
+                      f'Briefing:\n\n{brief}\n\nFaktengrundlage:\n\n{fakt}', 3000)
+    linkedin, instagram = _split_kanal(doppel)
+    pruef = _ki_text(p['pruefer'],
+                     f'Faktengrundlage:\n\n{fakt}\n\n'
+                     f'LinkedIn-Entwurf:\n{linkedin}\n\nInstagram-Entwurf:\n{instagram}', 2000)
+    return {'brief': brief, 'linkedin': linkedin, 'instagram': instagram, 'pruef': pruef}
+
+
+def _content_laden():
+    liste = _lade(CONTENT_PATH, [])
+    return liste if isinstance(liste, list) else []
+
+
+def _content_speichern(eintrag: dict) -> str:
+    liste = _content_laden()
+    liste.insert(0, eintrag)
+    _sichere(CONTENT_PATH, liste[:40])
+    return eintrag['id']
+
+
+def _content_aktualisieren(cid: str, linkedin: str, instagram: str):
+    liste = _content_laden()
+    for e in liste:
+        if e.get('id') == cid:
+            e['linkedin'] = (linkedin or '').strip()
+            e['instagram'] = (instagram or '').strip()
+            _sichere(CONTENT_PATH, liste)
+            return
+
+
+def _content_loeschen(cid: str):
+    _sichere(CONTENT_PATH, [e for e in _content_laden() if e.get('id') != cid])
 
 
 # ── Zugang (nur admin) ───────────────────────────────────────────────────────
@@ -256,6 +393,7 @@ def _subtabs(active: str) -> str:
         return f'<a href="{href}"{cls}>{label}</a>'
     return ('<div class="subtabs">'
             + a('ueberblick', 'Wochenüberblick', '/')
+            + a('content', 'Content-Pipeline', '/content')
             + a('linkedin', 'LinkedIn-Beiträge', '/linkedin')
             + '</div>')
 
@@ -454,6 +592,85 @@ def _linkedin_html(draft: str = '', thema: str = '', saved_id: str = '') -> str:
             + _subtabs('linkedin') + kistat + form + ergebnis + archiv)
 
 
+def _content_html(res=None, thema='', saved_id='', hinweis=''):
+    ki_aktiv = bool(os.environ.get('ANTHROPIC_API_KEY'))
+    aktiv = '' if ki_aktiv else ' disabled'
+    kistat = ('' if ki_aktiv else
+              '<div class="row" style="margin-top:2px"><span class="badge warn">Kein '
+              '<code>ANTHROPIC_API_KEY</code> &ndash; Pipeline nicht möglich</span></div>')
+
+    form = (
+        '<div class="statusbox" style="margin-top:14px">'
+        '<div class="step"><span class="ttl">Neuen Content erzeugen</span></div>'
+        '<p class="hint" style="margin:4px 0 0">Thema/Aufhänger (oder leer lassen &ndash; dann wählt der '
+        'Kurator selbst aus dem Wochenüberblick). Drei Agenten nacheinander: <b>Kurator</b> (Briefing) '
+        '&rarr; <b>Texter</b> (LinkedIn + Instagram) &rarr; <b>Prüfer</b> (Ampel &amp; Hinweise). Freigabe '
+        'und Posten bleiben bei dir.</p>'
+        '<form method="post" action="/content">'
+        '<textarea name="thema" rows="3" style="width:100%;margin-top:8px" '
+        f'placeholder="z. B. PPWR aus Lieferantensicht bei Dropshipping – wer trägt die Erzeugerpflicht?">{_esc(thema)}</textarea>'
+        '<label style="display:flex;gap:8px;align-items:center;margin:8px 0;font-size:13px">'
+        '<input type="checkbox" name="kontext" value="1" checked style="width:16px;height:16px;min-width:0"> '
+        'Aktuellen Wochenüberblick als Faktengrundlage nutzen</label>'
+        f'<div class="row"><button class="btn" type="submit"{aktiv}>Pipeline starten</button> '
+        '<a class="btn ghost" href="/content/vorlagen">Agenten-Vorlagen bearbeiten</a></div>'
+        '<p class="hint" style="margin:8px 0 0">Dauert ~1 Minute (drei Modelldurchläufe). Für Bilder '
+        'liefert die Instagram-Fassung ein fertiges Bild-Briefing (Nano Banana / Gemini).</p>'
+        '</form></div>')
+
+    ergebnis = ''
+    if res:
+        li = res.get('linkedin') or ''
+        ig = res.get('instagram') or ''
+        ergebnis = (
+            '<div class="statusbox" style="margin-top:14px">'
+            '<div class="step"><span class="ttl">1 &middot; Briefing (Kurator)</span></div>'
+            f'<div class="feed">{_md_html(res.get("brief") or "")}</div></div>'
+            '<div class="statusbox laeuft" style="margin-top:14px">'
+            '<div class="step"><span class="ttl">3 &middot; Prüfbericht (Prüfer)</span></div>'
+            f'<div class="feed">{_md_html(res.get("pruef") or "")}</div>'
+            '<p class="hint" style="margin:6px 0 0">Vorprüfung &ndash; die finale Freigabe machst du.</p></div>'
+            '<form method="post" action="/content/speichern">'
+            f'<input type="hidden" name="id" value="{_esc(saved_id)}">'
+            '<div class="statusbox" style="margin-top:14px">'
+            '<div class="step"><span class="ttl">2 &middot; LinkedIn-Fassung</span></div>'
+            f'<textarea id="cli" name="linkedin" rows="12" style="width:100%;margin-top:8px">{_esc(li)}</textarea>'
+            f'<div class="row">{_kopier_btn("cli")}</div></div>'
+            '<div class="statusbox" style="margin-top:14px">'
+            '<div class="step"><span class="ttl">Instagram-Fassung (inkl. Bild-Briefing)</span></div>'
+            f'<textarea id="cig" name="instagram" rows="12" style="width:100%;margin-top:8px">{_esc(ig)}</textarea>'
+            f'<div class="row">{_kopier_btn("cig")} '
+            '<button class="btn" type="submit">Bearbeitete Fassungen speichern</button></div></div>'
+            '</form>')
+
+    posts = _content_laden()
+    archiv = ''
+    if posts:
+        zeilen = ''
+        for p in posts:
+            cid = p.get('id') or ''
+            thema_z = (f' &middot; <span style="color:var(--muted)">{_esc(p.get("thema"))}</span>'
+                       if p.get('thema') else '')
+            zeilen += (
+                '<div class="statusbox" style="margin-top:12px">'
+                f'<div class="hint" style="margin-bottom:6px">{_esc(p.get("datum") or "")}{thema_z}</div>'
+                '<div class="hint" style="margin:4px 0 2px">LinkedIn</div>'
+                f'<textarea id="al{_esc(cid)}" rows="6" style="width:100%">{_esc(p.get("linkedin") or "")}</textarea>'
+                f'<div class="row" style="margin:4px 0 8px">{_kopier_btn("al" + cid)}</div>'
+                '<div class="hint" style="margin:4px 0 2px">Instagram (inkl. Bild-Briefing)</div>'
+                f'<textarea id="ai{_esc(cid)}" rows="6" style="width:100%">{_esc(p.get("instagram") or "")}</textarea>'
+                f'<div class="row" style="margin-top:4px">{_kopier_btn("ai" + cid)} '
+                f'<form method="post" action="/content/{_esc(cid)}/loeschen" style="display:inline" '
+                'onsubmit="return confirm(\'Eintrag löschen?\')">'
+                '<button class="btn ghost" type="submit">Löschen</button></form></div></div>')
+        archiv = ('<div class="step" style="margin-top:26px"><span class="ttl">Gespeicherte Inhalte '
+                  f'({len(posts)})</span></div>' + zeilen)
+
+    warn = (f'<div class="statusbox"><span class="badge warn">{hinweis}</span></div>' if hinweis else '')
+    return (_platte('Content-Pipeline &ndash; Kurator &middot; Texter &middot; Prüfer, Freigabe durch dich')
+            + _subtabs('content') + kistat + warn + form + ergebnis + archiv)
+
+
 def _startseite_html():
     st = _status()
     briefings = _lade(BRIEF_PATH, []) or []
@@ -589,6 +806,95 @@ async def linkedin_speichern(request: Request):
 def linkedin_loeschen(request: Request, lid: str):
     _li_loeschen(lid)
     return RedirectResponse('/linkedin', status_code=303)
+
+
+# ── Content-Pipeline (3 Agenten) ─────────────────────────────────────────────
+@app.get('/content', response_class=HTMLResponse)
+def content_seite(request: Request):
+    return HTMLResponse(_seite(_content_html(), request.state.user))
+
+
+@app.post('/content', response_class=HTMLResponse)
+async def content_run(request: Request):
+    form = await request.form()
+    thema = (form.get('thema') or '').strip()
+    kontext = form.get('kontext') == '1'
+    md = ''
+    if kontext:
+        bs = _lade(BRIEF_PATH, []) or []
+        if bs:
+            md = bs[0].get('md') or ''
+    if not thema and not md:
+        return HTMLResponse(_seite(_content_html(
+            hinweis='Bitte ein Thema angeben oder den Wochenüberblick als Grundlage nutzen '
+                    '(noch kein Überblick vorhanden).'), request.state.user))
+    res = None
+    saved_id = ''
+    try:
+        res = await run_in_threadpool(_content_pipeline, thema, md)
+        eintrag = {'id': secrets.token_hex(6),
+                   'ts': datetime.now().isoformat(timespec='seconds'),
+                   'datum': datetime.now().strftime('%d.%m.%Y'),
+                   'thema': thema, **res}
+        saved_id = _content_speichern(eintrag)
+    except Exception as e:  # noqa: BLE001
+        res = {'brief': '', 'linkedin': '', 'instagram': '',
+               'pruef': 'Fehler bei der Erstellung: ' + str(e)[:300]}
+    return HTMLResponse(_seite(_content_html(res, thema, saved_id), request.state.user))
+
+
+@app.post('/content/speichern')
+async def content_speichern(request: Request):
+    form = await request.form()
+    cid = (form.get('id') or '').strip()
+    li = (form.get('linkedin') or '').strip()
+    ig = (form.get('instagram') or '').strip()
+    if cid:
+        _content_aktualisieren(cid, li, ig)
+    return RedirectResponse('/content', status_code=303)
+
+
+@app.get('/content/vorlagen', response_class=HTMLResponse)
+def content_vorlagen(request: Request, ok: str = '', reset: str = ''):
+    if reset:
+        _sichere(CONTENT_SPEC_PATH, {})
+        return RedirectResponse('/content/vorlagen?ok=1', status_code=303)
+    p = _content_prompts()
+    hinweis = '<p class="msg-ok">Vorlagen gespeichert.</p>' if ok else ''
+
+    def feld(key, titel):
+        return (f'<div class="step" style="margin-top:16px"><span class="ttl">{titel}</span></div>'
+                f'<textarea name="{key}" rows="12" style="width:100%;font-size:13px;'
+                f'font-family:var(--mono)">{_esc(p[key])}</textarea>')
+
+    inhalt = (_platte('Agenten-Vorlagen bearbeiten &ndash; Kurator, Texter, Prüfer')
+              + '<p style="margin-top:12px"><a href="/content">&larr; Zur Content-Pipeline</a></p>'
+              + hinweis
+              + '<p class="hint">Die drei System-Prompts der Pipeline. Leeres Feld + Speichern = eingebaute '
+              'Standard-Vorlage. Änderungen wirken ab dem nächsten Lauf.</p>'
+              '<form method="post" action="/content/vorlagen">'
+              + feld('kurator', '1 · Kurator (Briefing)')
+              + feld('texter', '2 · Texter (LinkedIn + Instagram)')
+              + feld('pruefer', '3 · Prüfer (Ampel & Hinweise)')
+              + '<div class="row" style="margin-top:10px">'
+              '<button class="btn" type="submit">Speichern</button> '
+              '<a class="btn ghost" href="/content/vorlagen?reset=1">Auf Standard zurücksetzen</a>'
+              '</div></form>')
+    return HTMLResponse(_seite(inhalt, request.state.user))
+
+
+@app.post('/content/vorlagen')
+async def content_vorlagen_speichern(request: Request):
+    form = await request.form()
+    d = {k: (form.get(k) or '').strip() for k in ('kurator', 'texter', 'pruefer')}
+    _sichere(CONTENT_SPEC_PATH, {k: v for k, v in d.items() if v})  # leer -> Standard
+    return RedirectResponse('/content/vorlagen?ok=1', status_code=303)
+
+
+@app.post('/content/{cid}/loeschen')
+def content_loeschen(request: Request, cid: str):
+    _content_loeschen(cid)
+    return RedirectResponse('/content', status_code=303)
 
 
 @app.get('/b/{bid}', response_class=HTMLResponse)
