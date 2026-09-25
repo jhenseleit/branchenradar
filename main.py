@@ -17,6 +17,7 @@ import secrets
 import threading
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 import markdown as _md
 from fastapi import FastAPI, File, Request, UploadFile
@@ -39,6 +40,7 @@ LI_PATH = DATA_DIR / 'linkedin_posts.json'
 CONTENT_PATH = DATA_DIR / 'content_posts.json'
 CONTENT_SPEC_PATH = DATA_DIR / 'content_prompts.json'
 PROFIL_PATH = DATA_DIR / 'profil.json'          # zentrales „Über mich" für alle Content-Agenten
+TOPICS_PATH = DATA_DIR / 'themen.json'          # Themenspeicher (Ideen-Inbox)
 REFS_DIR = DATA_DIR / 'refs'        # Referenzfotos (Gesicht) – bleiben auf dem Volume
 BILDER_DIR = DATA_DIR / 'bilder'    # erzeugte Instagram-Bilder
 AUDIT_DB = DATA_DIR / 'audit.db'
@@ -196,12 +198,17 @@ KURATOR_DEFAULT = (
 TEXTER_DEFAULT = (
     'Du schreibst fertige Social-Media-Beiträge für die Person aus dem Profil oben.\n\n'
     f'Tonregeln für BEIDE Kanäle: {_TONREGELN}\n\n'
-    'Erzeuge aus dem Briefing zwei Fassungen desselben Themas und trenne sie EXAKT mit diesen '
+    'Erzeuge aus dem Briefing DREI Fassungen desselben Themas und trenne sie EXAKT mit diesen '
     'Markierungen, jeweils in einer eigenen Zeile:\n'
     '[LINKEDIN]\n'
-    'Der LinkedIn-Beitrag: 120–220 Wörter, ein klarer Aufhänger, ein Kerngedanke, ein konkreter '
+    'Der LinkedIn-Beitrag (Post): 120–220 Wörter, ein klarer Aufhänger, ein Kerngedanke, ein konkreter '
     'Abschluss ohne aufgesetzte Handlungsaufforderung. Am Ende maximal 5 passende, spezifische, '
     'branchenbezogene Hashtags in einer eigenen Zeile.\n'
+    '[NEWSLETTER]\n'
+    'Der LinkedIn-Newsletter zum selben Thema, aus Lieferantensicht – länger und ausführlicher als der '
+    'Post: erste Zeile „Titel:" mit einem prägnanten Titel, dann 300–600 Wörter Fließtext mit klarem '
+    'Bogen (Einstieg, zwei bis drei Aspekte – bei Bedarf mit kurzen Zwischenüberschriften – und ein '
+    'Abschluss, der einordnet statt zu werben). Gleicher Ton, keine Emojis, keine Hashtags.\n'
     '[INSTAGRAM]\n'
     'Die Instagram-Fassung, gleicher fachlicher Ton, ebenfalls keine Emojis: Hook in der ERSTEN Zeile '
     '(vor dem „mehr anzeigen"), danach kurze, durch Leerzeilen getrennte Absätze, insgesamt kürzer als '
@@ -210,13 +217,14 @@ TEXTER_DEFAULT = (
     'Sätzen einen fertigen Bild-Prompt beschreibt – formuliert so, dass die Referenzperson (Jörn) im Bild '
     'vorkommt (z. B. „Referenzperson im Lager vor Palettenware, …"), sachlich und markenpassend, keine '
     'Effekthascherei.\n\n'
-    'Gib ausschließlich die zwei markierten Fassungen zurück – keine Vorrede, keine Meta-Kommentare.')
+    'Gib ausschließlich die drei markierten Fassungen zurück – keine Vorrede, keine Meta-Kommentare.')
 
 PRUEFER_DEFAULT = (
     'Du bist der kritische Lektor und Faktenprüfer für die Beiträge der Person aus dem Profil oben.\n\n'
     f'Prüfe die beiden Entwürfe streng gegen die Faktengrundlage und die Tonregeln: {_TONREGELN}\n\n'
     'Gib einen knappen Prüfbericht als Markdown zurück:\n'
-    '- **LinkedIn – Ampel:** Grün/Gelb/Rot, mit den konkreten Fundstellen.\n'
+    '- **LinkedIn-Post – Ampel:** Grün/Gelb/Rot, mit den konkreten Fundstellen.\n'
+    '- **LinkedIn-Newsletter – Ampel:** Grün/Gelb/Rot, mit den konkreten Fundstellen.\n'
     '- **Instagram – Ampel:** Grün/Gelb/Rot, mit den konkreten Fundstellen.\n\n'
     'Prüfkriterien: (1) Jede Zahl/Behauptung im Entwurf muss in der Faktengrundlage mit Quelle stehen – '
     'markiere alles Unbelegte. (2) Tonverstöße: Emojis, Floskeln, Beratersprech, Dreierfiguren, die '
@@ -240,6 +248,16 @@ BILDPROMPT_DEFAULT = (
     'Gib AUSSCHLIESSLICH den fertigen Bild-Prompt als Fließtext zurück (2–4 Sätze) – keine Überschrift, '
     'keine Erklärung, keine Varianten.')
 
+IDEEN_DEFAULT = (
+    'Du bist Themen-Ideengeber für die Person aus dem Profil oben.\n\n'
+    'Schlage konkrete, posting-würdige Themen/Aufhänger vor, die zu ihrem Profil, ihren Kernthemen und '
+    'ihrer Haltung passen – aus Lieferantensicht ebenso wie aus dem persönlichen/ehrenamtlichen Bereich, '
+    'wenn es passt. Keine ausgelutschten Motivationsthemen, keine Beratersprech-Titel. Jede Idee ist ein '
+    'konkreter Aufhänger, aus dem sich ein Beitrag bauen lässt – nicht nur ein Schlagwort.\n'
+    'Format: eine Idee pro Zeile, jeweils beginnend mit „- ", der Aufhänger in einem Satz (optional ein '
+    'knapper Halbsatz zum Blickwinkel). Keine Nummerierung, keine Überschrift, keine Einleitung, keine '
+    'Erklärung – nur die Liste.')
+
 
 def _content_prompts() -> dict:
     d = _lade(CONTENT_SPEC_PATH, None)
@@ -248,7 +266,8 @@ def _content_prompts() -> dict:
     return {'kurator': d.get('kurator') or KURATOR_DEFAULT,
             'texter': d.get('texter') or TEXTER_DEFAULT,
             'pruefer': d.get('pruefer') or PRUEFER_DEFAULT,
-            'bildprompt': d.get('bildprompt') or BILDPROMPT_DEFAULT}
+            'bildprompt': d.get('bildprompt') or BILDPROMPT_DEFAULT,
+            'ideen': d.get('ideen') or IDEEN_DEFAULT}
 
 
 def _ki_text(system: str, user: str, max_tokens: int = 4000) -> str:
@@ -263,14 +282,16 @@ def _ki_text(system: str, user: str, max_tokens: int = 4000) -> str:
                    if getattr(b, 'type', None) == 'text').strip()
 
 
-def _split_kanal(text: str):
-    """Zerlegt die Texter-Ausgabe an [LINKEDIN]/[INSTAGRAM] in zwei Fassungen."""
-    li, ig = text, ''
-    if '[INSTAGRAM]' in text:
-        li, ig = text.split('[INSTAGRAM]', 1)
-    li = li.replace('[LINKEDIN]', '').strip()
-    ig = ig.strip()
-    return li, ig
+def _split_kanaele(text: str):
+    """Zerlegt die Texter-Ausgabe an [LINKEDIN]/[NEWSLETTER]/[INSTAGRAM] in drei Fassungen."""
+    rest = text or ''
+    ig = nl = ''
+    if '[INSTAGRAM]' in rest:
+        rest, ig = rest.split('[INSTAGRAM]', 1)
+    if '[NEWSLETTER]' in rest:
+        rest, nl = rest.split('[NEWSLETTER]', 1)
+    li = rest.replace('[LINKEDIN]', '').strip()
+    return li, nl.strip(), ig.strip()
 
 
 def _content_pipeline(thema: str, kontext_md: str = '') -> dict:
@@ -284,14 +305,14 @@ def _content_pipeline(thema: str, kontext_md: str = '') -> dict:
                      f'Thema/Aufhänger vom Nutzer:\n{thema_txt}\n\n'
                      f'Faktengrundlage (aktueller Branchenüberblick):\n\n{fakt}', 2000)
     doppel = _ki_text(_mit_profil(p['texter']),
-                      f'Briefing:\n\n{brief}\n\nFaktengrundlage:\n\n{fakt}', 3000)
-    linkedin, instagram = _split_kanal(doppel)
+                      f'Briefing:\n\n{brief}\n\nFaktengrundlage:\n\n{fakt}', 4500)
+    linkedin, newsletter, instagram = _split_kanaele(doppel)
     pruef = _ki_text(_mit_profil(p['pruefer']),
-                     f'Faktengrundlage:\n\n{fakt}\n\n'
-                     f'LinkedIn-Entwurf:\n{linkedin}\n\nInstagram-Entwurf:\n{instagram}', 2000)
+                     f'Faktengrundlage:\n\n{fakt}\n\nLinkedIn-Post:\n{linkedin}\n\n'
+                     f'LinkedIn-Newsletter:\n{newsletter}\n\nInstagram-Entwurf:\n{instagram}', 2200)
     bildprompt = _ki_text(_mit_profil(p['bildprompt']),
                           f'Thema/Briefing:\n\n{brief}\n\nInstagram-Fassung:\n{instagram}', 800)
-    return {'brief': brief, 'linkedin': linkedin, 'instagram': instagram,
+    return {'brief': brief, 'linkedin': linkedin, 'newsletter': newsletter, 'instagram': instagram,
             'pruef': pruef, 'bildprompt': bildprompt}
 
 
@@ -307,11 +328,12 @@ def _content_speichern(eintrag: dict) -> str:
     return eintrag['id']
 
 
-def _content_aktualisieren(cid: str, linkedin: str, instagram: str):
+def _content_aktualisieren(cid: str, linkedin: str, newsletter: str, instagram: str):
     liste = _content_laden()
     for e in liste:
         if e.get('id') == cid:
             e['linkedin'] = (linkedin or '').strip()
+            e['newsletter'] = (newsletter or '').strip()
             e['instagram'] = (instagram or '').strip()
             _sichere(CONTENT_PATH, liste)
             return
@@ -319,6 +341,45 @@ def _content_aktualisieren(cid: str, linkedin: str, instagram: str):
 
 def _content_loeschen(cid: str):
     _sichere(CONTENT_PATH, [e for e in _content_laden() if e.get('id') != cid])
+
+
+# ── Themen-System: Ideengenerator + Themenspeicher ───────────────────────────
+def _themen_laden():
+    liste = _lade(TOPICS_PATH, [])
+    return liste if isinstance(liste, list) else []
+
+
+def _thema_speichern(titel: str, notiz: str = '') -> str:
+    titel = (titel or '').strip()
+    if not titel:
+        return ''
+    liste = _themen_laden()
+    tid = secrets.token_hex(6)
+    liste.insert(0, {'id': tid, 'ts': datetime.now().isoformat(timespec='seconds'),
+                     'datum': datetime.now().strftime('%d.%m.%Y'), 'titel': titel,
+                     'notiz': (notiz or '').strip()})
+    _sichere(TOPICS_PATH, liste[:100])
+    return tid
+
+
+def _thema_loeschen(tid: str):
+    _sichere(TOPICS_PATH, [t for t in _themen_laden() if t.get('id') != tid])
+
+
+def _ideen_generieren(fokus: str = '', anzahl: int = 12):
+    """KI schlägt Themen aus dem Profil (+ optionalem Fokus) vor. -> Liste von Strings."""
+    p = _content_prompts()
+    user = f'Schlage {anzahl} konkrete Themen/Aufhänger vor.'
+    if (fokus or '').strip():
+        user += f'\n\nAktueller Fokus / Wunschrichtung des Nutzers:\n{fokus.strip()}'
+    text = _ki_text(_mit_profil(p['ideen']), user, 1500)
+    ideen = []
+    for zeile in (text or '').splitlines():
+        z = zeile.strip().lstrip('-*•').strip()
+        z = re.sub(r'^\d+[\.\)]\s*', '', z).strip()
+        if z:
+            ideen.append(z)
+    return ideen
 
 
 # ── Bildgenerierung (Nano Banana / Gemini) mit Referenzgesicht ───────────────
@@ -576,6 +637,7 @@ def _subtabs(active: str) -> str:
         return f'<a href="{href}"{cls}>{label}</a>'
     return ('<div class="subtabs">'
             + a('ueberblick', 'Wochenüberblick', '/')
+            + a('themen', 'Themen', '/themen')
             + a('content', 'Content-Pipeline', '/content')
             + a('linkedin', 'LinkedIn-Beiträge', '/linkedin')
             + '</div>')
@@ -805,21 +867,26 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
     ergebnis = ''
     if res:
         li = res.get('linkedin') or ''
+        nl = res.get('newsletter') or ''
         ig = res.get('instagram') or ''
         ergebnis = (
             '<div class="statusbox" style="margin-top:14px">'
             '<div class="step"><span class="ttl">1 &middot; Briefing (Kurator)</span></div>'
             f'<div class="feed">{_md_html(res.get("brief") or "")}</div></div>'
             '<div class="statusbox laeuft" style="margin-top:14px">'
-            '<div class="step"><span class="ttl">3 &middot; Prüfbericht (Prüfer)</span></div>'
+            '<div class="step"><span class="ttl">Prüfbericht (Prüfer)</span></div>'
             f'<div class="feed">{_md_html(res.get("pruef") or "")}</div>'
             '<p class="hint" style="margin:6px 0 0">Vorprüfung &ndash; die finale Freigabe machst du.</p></div>'
             '<form method="post" action="/content/speichern">'
             f'<input type="hidden" name="id" value="{_esc(saved_id)}">'
             '<div class="statusbox" style="margin-top:14px">'
-            '<div class="step"><span class="ttl">2 &middot; LinkedIn-Fassung</span></div>'
+            '<div class="step"><span class="ttl">LinkedIn-Post</span></div>'
             f'<textarea id="cli" name="linkedin" rows="12" style="width:100%;margin-top:8px">{_esc(li)}</textarea>'
             f'<div class="row">{_kopier_btn("cli")}</div></div>'
+            '<div class="statusbox" style="margin-top:14px">'
+            '<div class="step"><span class="ttl">LinkedIn-Newsletter</span></div>'
+            f'<textarea id="cnl" name="newsletter" rows="16" style="width:100%;margin-top:8px">{_esc(nl)}</textarea>'
+            f'<div class="row">{_kopier_btn("cnl")}</div></div>'
             '<div class="statusbox" style="margin-top:14px">'
             '<div class="step"><span class="ttl">Instagram-Fassung (inkl. Bild-Briefing)</span></div>'
             f'<textarea id="cig" name="instagram" rows="12" style="width:100%;margin-top:8px">{_esc(ig)}</textarea>'
@@ -865,9 +932,12 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
             zeilen += (
                 '<div class="statusbox" style="margin-top:12px">'
                 f'<div class="hint" style="margin-bottom:6px">{_esc(p.get("datum") or "")}{thema_z}</div>'
-                '<div class="hint" style="margin:4px 0 2px">LinkedIn</div>'
+                '<div class="hint" style="margin:4px 0 2px">LinkedIn-Post</div>'
                 f'<textarea id="al{_esc(cid)}" rows="6" style="width:100%">{_esc(p.get("linkedin") or "")}</textarea>'
                 f'<div class="row" style="margin:4px 0 8px">{_kopier_btn("al" + cid)}</div>'
+                '<div class="hint" style="margin:4px 0 2px">LinkedIn-Newsletter</div>'
+                f'<textarea id="an{_esc(cid)}" rows="8" style="width:100%">{_esc(p.get("newsletter") or "")}</textarea>'
+                f'<div class="row" style="margin:4px 0 8px">{_kopier_btn("an" + cid)}</div>'
                 '<div class="hint" style="margin:4px 0 2px">Instagram (inkl. Bild-Briefing)</div>'
                 f'<textarea id="ai{_esc(cid)}" rows="6" style="width:100%">{_esc(p.get("instagram") or "")}</textarea>'
                 f'<div class="row" style="margin-top:4px">{_kopier_btn("ai" + cid)}</div>'
@@ -882,6 +952,76 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
     warn = (f'<div class="statusbox"><span class="badge warn">{hinweis}</span></div>' if hinweis else '')
     return (_platte('Content-Pipeline &ndash; Kurator &middot; Texter &middot; Prüfer, Freigabe durch dich')
             + _subtabs('content') + kistat + warn + form + referenz_karte + ergebnis + archiv)
+
+
+def _themen_html(vorschlaege=None, fokus='', hinweis=''):
+    ki_aktiv = bool(os.environ.get('ANTHROPIC_API_KEY'))
+    aktiv = '' if ki_aktiv else ' disabled'
+    kistat = ('' if ki_aktiv else
+              '<div class="row" style="margin-top:2px"><span class="badge warn">Kein '
+              '<code>ANTHROPIC_API_KEY</code> &ndash; Ideenvorschläge nicht möglich</span></div>')
+    warn = (f'<div class="statusbox"><span class="badge warn">{hinweis}</span></div>' if hinweis else '')
+
+    gen = (
+        '<div class="statusbox" style="margin-top:14px">'
+        '<div class="step"><span class="ttl">Ideen vorschlagen lassen</span></div>'
+        '<p class="hint" style="margin:4px 0 0">Die KI schlägt aus deinem <a href="/content/profil">Profil</a> '
+        'konkrete Themen vor. Optional eine Richtung vorgeben (z. B. „Lieferzeit", „Ehrenamt", „20 Jahre '
+        'Skyport"). Gute Ideen übernimmst du in den Speicher.</p>'
+        '<form method="post" action="/themen/ideen">'
+        f'<textarea name="fokus" rows="2" style="width:100%;margin-top:8px" '
+        f'placeholder="optional: Fokus / Wunschrichtung">{_esc(fokus)}</textarea>'
+        f'<div class="row" style="margin-top:6px"><button class="btn" type="submit"{aktiv}>Ideen vorschlagen</button></div>'
+        '</form></div>')
+
+    vorschau = ''
+    if vorschlaege:
+        zeilen = ''
+        for idee in vorschlaege:
+            zeilen += (
+                '<div class="row" style="align-items:flex-start;gap:8px;border-bottom:1px solid var(--line);padding:8px 0">'
+                f'<div style="flex:1">{_esc(idee)}</div>'
+                '<form method="post" action="/themen/add" style="display:inline">'
+                f'<input type="hidden" name="titel" value="{_esc(idee)}">'
+                '<button class="btn ghost" type="submit">In Speicher</button></form>'
+                f'<a class="btn ghost" href="/content?thema={quote(idee)}">&rarr; Beitrag</a></div>')
+        vorschau = ('<div class="statusbox" style="margin-top:14px">'
+                    f'<div class="step"><span class="ttl">Vorschläge ({len(vorschlaege)})</span></div>'
+                    + zeilen + '</div>')
+
+    manuell = (
+        '<div class="statusbox" style="margin-top:14px">'
+        '<div class="step"><span class="ttl">Eigene Idee ablegen</span></div>'
+        '<form method="post" action="/themen/add">'
+        '<input type="text" name="titel" placeholder="Thema / Aufhänger" style="width:100%;margin-top:8px">'
+        '<textarea name="notiz" rows="2" style="width:100%;margin-top:6px" placeholder="Notiz / Link (optional)"></textarea>'
+        '<div class="row" style="margin-top:6px"><button class="btn ghost" type="submit">Ablegen</button></div>'
+        '</form></div>')
+
+    themen = _themen_laden()
+    if themen:
+        zeilen = ''
+        for t in themen:
+            tid = t.get('id') or ''
+            notiz = (f'<div class="hint" style="margin-top:2px">{_esc(t.get("notiz"))}</div>'
+                     if t.get('notiz') else '')
+            zeilen += (
+                '<div class="statusbox" style="margin-top:10px">'
+                f'<div style="font-weight:600">{_esc(t.get("titel") or "")}</div>{notiz}'
+                f'<div class="hint" style="margin-top:2px">{_esc(t.get("datum") or "")}</div>'
+                '<div class="row" style="margin-top:6px">'
+                f'<a class="btn ghost" href="/content?thema={quote(t.get("titel") or "")}">&rarr; Beitrag erstellen</a>'
+                f'<form method="post" action="/themen/{_esc(tid)}/loeschen" style="display:inline" '
+                'onsubmit="return confirm(\'Thema löschen?\')">'
+                '<button class="btn ghost" type="submit">Löschen</button></form></div></div>')
+        speicher = ('<div class="step" style="margin-top:26px"><span class="ttl">Themenspeicher '
+                    f'({len(themen)})</span></div>' + zeilen)
+    else:
+        speicher = ('<div class="step" style="margin-top:26px"><span class="ttl">Themenspeicher</span></div>'
+                    '<p class="hint">Noch keine Themen abgelegt.</p>')
+
+    return (_platte('Themen &ndash; Ideengenerator &amp; Themenspeicher, speist den Kurator')
+            + _subtabs('themen') + kistat + warn + gen + vorschau + manuell + speicher)
 
 
 def _startseite_html():
@@ -1023,8 +1163,38 @@ def linkedin_loeschen(request: Request, lid: str):
 
 # ── Content-Pipeline (3 Agenten) ─────────────────────────────────────────────
 @app.get('/content', response_class=HTMLResponse)
-def content_seite(request: Request):
-    return HTMLResponse(_seite(_content_html(), request.state.user))
+def content_seite(request: Request, thema: str = ''):
+    return HTMLResponse(_seite(_content_html(thema=thema), request.state.user))
+
+
+@app.get('/themen', response_class=HTMLResponse)
+def themen_seite(request: Request):
+    return HTMLResponse(_seite(_themen_html(), request.state.user))
+
+
+@app.post('/themen/ideen', response_class=HTMLResponse)
+async def themen_ideen(request: Request):
+    form = await request.form()
+    fokus = (form.get('fokus') or '').strip()
+    try:
+        vorschlaege = await run_in_threadpool(_ideen_generieren, fokus)
+    except Exception as e:  # noqa: BLE001
+        return HTMLResponse(_seite(_themen_html(fokus=fokus,
+                            hinweis='Ideensuche fehlgeschlagen: ' + str(e)[:200]), request.state.user))
+    return HTMLResponse(_seite(_themen_html(vorschlaege, fokus), request.state.user))
+
+
+@app.post('/themen/add')
+async def themen_add(request: Request):
+    form = await request.form()
+    _thema_speichern(form.get('titel') or '', form.get('notiz') or '')
+    return RedirectResponse('/themen', status_code=303)
+
+
+@app.post('/themen/{tid}/loeschen')
+def themen_loeschen(request: Request, tid: str):
+    _thema_loeschen(tid)
+    return RedirectResponse('/themen', status_code=303)
 
 
 @app.post('/content', response_class=HTMLResponse)
@@ -1061,9 +1231,10 @@ async def content_speichern(request: Request):
     form = await request.form()
     cid = (form.get('id') or '').strip()
     li = (form.get('linkedin') or '').strip()
+    nl = (form.get('newsletter') or '').strip()
     ig = (form.get('instagram') or '').strip()
     if cid:
-        _content_aktualisieren(cid, li, ig)
+        _content_aktualisieren(cid, li, nl, ig)
     return RedirectResponse('/content', status_code=303)
 
 
@@ -1090,6 +1261,7 @@ def content_vorlagen(request: Request, ok: str = '', reset: str = ''):
               + feld('texter', '2 · Texter (LinkedIn + Instagram)')
               + feld('pruefer', '3 · Prüfer (Ampel & Hinweise)')
               + feld('bildprompt', '4 · Bild-Prompt-Designer (Nano Banana)')
+              + feld('ideen', '5 · Themen-Ideengeber')
               + '<div class="row" style="margin-top:10px">'
               '<button class="btn" type="submit">Speichern</button> '
               '<a class="btn ghost" href="/content/vorlagen?reset=1">Auf Standard zurücksetzen</a>'
@@ -1100,7 +1272,7 @@ def content_vorlagen(request: Request, ok: str = '', reset: str = ''):
 @app.post('/content/vorlagen')
 async def content_vorlagen_speichern(request: Request):
     form = await request.form()
-    d = {k: (form.get(k) or '').strip() for k in ('kurator', 'texter', 'pruefer', 'bildprompt')}
+    d = {k: (form.get(k) or '').strip() for k in ('kurator', 'texter', 'pruefer', 'bildprompt', 'ideen')}
     _sichere(CONTENT_SPEC_PATH, {k: v for k, v in d.items() if v})  # leer -> Standard
     return RedirectResponse('/content/vorlagen?ok=1', status_code=303)
 
