@@ -43,6 +43,7 @@ CONTENT_SPEC_PATH = DATA_DIR / 'content_prompts.json'
 PROFIL_PATH = DATA_DIR / 'profil.json'          # zentrales „Über mich" für alle Content-Agenten
 TOPICS_PATH = DATA_DIR / 'themen.json'          # Themenspeicher (Ideen-Inbox)
 REFS_DIR = DATA_DIR / 'refs'        # Referenzfotos (Gesicht) – bleiben auf dem Volume
+STIL_DIR = DATA_DIR / 'stil'        # Stil-Referenzbilder (Look/Komposition, keine Identität)
 BILDER_DIR = DATA_DIR / 'bilder'    # erzeugte Instagram-Bilder
 AUDIT_DB = DATA_DIR / 'audit.db'
 
@@ -475,6 +476,14 @@ def _ref_liste():
         return []
 
 
+def _stil_liste():
+    try:
+        return sorted(p.name for p in STIL_DIR.iterdir()
+                      if p.is_file() and p.suffix.lower() in _BILD_SUFFIXE)
+    except (OSError, FileNotFoundError):
+        return []
+
+
 def _bild_briefing(instagram_text: str) -> str:
     """Extrahiert den Bild-Prompt aus der „Bild-Briefing:"-Zeile der IG-Fassung."""
     t = instagram_text or ''
@@ -482,8 +491,9 @@ def _bild_briefing(instagram_text: str) -> str:
     return (m.group(1).strip() if m else t.strip())
 
 
-def _erzeuge_bild(prompt: str, ref_paths):
-    """Ruft Gemini (Nano Banana) mit Prompt + Referenzfotos auf. -> (bytes, mime)."""
+def _erzeuge_bild(prompt: str, ref_paths, stil_paths=None):
+    """Ruft Gemini (Nano Banana) mit Prompt + Gesichts- und optionalen Stil-Referenzen auf.
+    -> (bytes, mime)."""
     key = os.environ.get('GEMINI_API_KEY')
     if not key:
         raise RuntimeError('GEMINI_API_KEY ist nicht gesetzt.')
@@ -493,19 +503,29 @@ def _erzeuge_bild(prompt: str, ref_paths):
     from google.genai import types
     client = genai.Client(api_key=key)
 
+    def _teil(pfad):
+        try:
+            daten = Path(pfad).read_bytes()
+        except OSError:
+            return None
+        mime = 'image/png' if str(pfad).lower().endswith('.png') else 'image/jpeg'
+        return types.Part.from_bytes(data=daten, mime_type=mime)
+
     voll = ('Erstelle ein hochwertiges, professionelles Marken-/Editorial-Foto im Hochformat für einen '
             'LinkedIn-/Instagram-Post – klar, hell und vorteilhaft beleuchtet, gestochen scharf, gepflegt; '
             'kein düsterer, körniger oder unruhiger Look. Die abgebildete Person ist die Referenzperson '
-            'aus den beigefügten Fotos – wahre ihr Gesicht und ihre Identität möglichst genau, gepflegtes '
-            'Erscheinungsbild. Kein Text im Bild, keine Logos. Motiv: ' + (prompt or '').strip())
+            'aus den ersten beigefügten Fotos – wahre ihr Gesicht und ihre Identität möglichst genau, '
+            'gepflegtes Erscheinungsbild. Kein Text im Bild, keine Logos. Motiv: ' + (prompt or '').strip())
     contents = [voll]
     for rp in ref_paths:
-        try:
-            daten = Path(rp).read_bytes()
-        except OSError:
-            continue
-        mime = 'image/png' if str(rp).lower().endswith('.png') else 'image/jpeg'
-        contents.append(types.Part.from_bytes(data=daten, mime_type=mime))
+        teil = _teil(rp)
+        if teil is not None:
+            contents.append(teil)
+    stil_teile = [t for t in (_teil(sp) for sp in (stil_paths or [])) if t is not None]
+    if stil_teile:
+        contents.append('Die folgenden Bilder dienen NUR als Vorlage für Look, Bildstil, Licht, Farben '
+                        'und Bildaufbau – übernimm diesen Stil, aber NICHT eine fremde Identität:')
+        contents.extend(stil_teile)
 
     def _call(mit_format: bool):
         cfg = {'response_modalities': ['IMAGE']}
@@ -600,7 +620,8 @@ def _bild_fuer_content(cid: str):
         raise RuntimeError('Eintrag nicht gefunden.')
     prompt = (eintrag.get('bildprompt') or '').strip() or _bild_briefing(eintrag.get('instagram') or '')
     refs = [str(REFS_DIR / n) for n in _ref_liste()]
-    daten, _mime = _erzeuge_bild(prompt, refs)
+    stil = [str(STIL_DIR / n) for n in _stil_liste()]
+    daten, _mime = _erzeuge_bild(prompt, refs, stil)
     daten = _wasserzeichen(daten)          # Pflicht: sichtbarer „AI-generated"-Hinweis auf JEDEM Bild
     ext = '.png'
     name = f'{cid}{ext}'
@@ -1055,6 +1076,28 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
         '<form method="post" action="/content/gemini-test" style="margin-top:8px">'
         '<button class="btn ghost" type="submit">Gemini-Verbindung testen</button></form></div>')
 
+    # Stil-Referenzbilder (optional): geben Look/Komposition vor, nicht die Identität
+    stil = _stil_liste()
+    stil_thumbs = ''.join(
+        '<div style="display:inline-block;text-align:center;margin:0 8px 8px 0">'
+        f'<img src="/content/stil/{_esc(n)}" alt="" style="height:74px;width:74px;object-fit:cover;'
+        'border:1px solid var(--line);border-radius:8px;display:block">'
+        f'<form method="post" action="/content/stil/{_esc(n)}/loeschen" style="margin-top:3px" '
+        'onsubmit="return confirm(\'Stil-Referenzbild löschen?\')">'
+        '<button class="btn ghost" style="padding:2px 8px;font-size:11px" type="submit">entfernen</button>'
+        '</form></div>' for n in stil)
+    stil_karte = (
+        '<div class="statusbox" style="margin-top:14px">'
+        '<div class="step"><span class="ttl">Stil-Referenzbilder (optional)</span></div>'
+        '<p class="hint" style="margin:0 0 8px">Beispielbilder in deinem gewünschten Look (z. B. deine '
+        'bisherigen Beiträge). Sie geben Bildstil, Licht und Komposition vor &ndash; die Identität kommt '
+        'weiter von deinen Gesichtsfotos. Bleiben auf dem Server, nicht im Git.</p>'
+        + (f'<div style="margin-bottom:6px">{stil_thumbs}</div>' if stil_thumbs else
+           '<p class="hint" style="margin:0 0 8px">Noch keine Stil-Referenzbilder.</p>')
+        + '<form method="post" action="/content/stil" enctype="multipart/form-data" class="row">'
+        '<input type="file" name="fotos" accept="image/*" multiple>'
+        '<button class="btn ghost" type="submit">Hochladen</button></form></div>')
+
     posts = _content_laden()
     archiv = ''
     if posts:
@@ -1097,7 +1140,7 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
 
     warn = (f'<div class="statusbox"><span class="badge warn">{hinweis}</span></div>' if hinweis else '')
     return (_platte('Content-Pipeline &ndash; Kurator &middot; Texter &middot; Prüfer, Freigabe durch dich')
-            + _subtabs('content') + kistat + warn + form + referenz_karte + ergebnis + archiv
+            + _subtabs('content') + kistat + warn + form + referenz_karte + stil_karte + ergebnis + archiv
             + sicherung_karte)
 
 
@@ -1533,6 +1576,41 @@ def content_referenz_datei(request: Request, name: str):
 @app.post('/content/referenz/{name}/loeschen')
 def content_referenz_loeschen(request: Request, name: str):
     p = REFS_DIR / _sicherer_name(name)
+    try:
+        if p.is_file():
+            p.unlink()
+    except OSError:
+        pass
+    return RedirectResponse('/content', status_code=303)
+
+
+@app.post('/content/stil')
+async def content_stil_upload(request: Request):
+    form = await request.form()
+    for f in form.getlist('fotos'):
+        if not getattr(f, 'filename', ''):
+            continue
+        daten = await f.read()
+        if not daten:
+            continue
+        ext = os.path.splitext(f.filename)[1].lower()
+        if ext not in _BILD_SUFFIXE:
+            ext = '.jpg'
+        _sichere_bytes(STIL_DIR / (secrets.token_hex(6) + ext), daten)
+    return RedirectResponse('/content', status_code=303)
+
+
+@app.get('/content/stil/{name}')
+def content_stil_datei(request: Request, name: str):
+    p = STIL_DIR / _sicherer_name(name)
+    if p.is_file():
+        return FileResponse(str(p))
+    return RedirectResponse('/content', status_code=303)
+
+
+@app.post('/content/stil/{name}/loeschen')
+def content_stil_loeschen(request: Request, name: str):
+    p = STIL_DIR / _sicherer_name(name)
     try:
         if p.is_file():
             p.unlink()
