@@ -201,6 +201,21 @@ PRUEFER_DEFAULT = (
     'Schlage KEINE fertige Neufassung vor – nenne nur die konkreten Korrekturen. Schließe mit einer Zeile '
     '„Empfehlung: …" (freigeben / überarbeiten).')
 
+BILDPROMPT_DEFAULT = (
+    f'Du bist Bild-Prompt-Designer für die Instagram-Bilder von {_PERSONA}\n\n'
+    'Aus dem Beitrag baust du EINEN fertigen Bild-Prompt für Googles Bildmodell (Nano Banana / Gemini).\n'
+    'Regeln:\n'
+    '- Die abgebildete Person ist die Referenzperson (Jörn) – setze sie in eine glaubwürdige, zum Thema '
+    'passende Business-Situation (z. B. im Möbellager vor Palettenware, an einem Packtisch, im '
+    'Versandbereich). Kein Model-/Werbe-Look, seriös und sachlich.\n'
+    '- Beschreibe konkret: Szene und Umgebung, Handlung der Person, Bildausschnitt/Perspektive, '
+    'Licht und Stimmung (natürlich, professionell), fotorealistischer Stil.\n'
+    '- Instagram-Hochformat (4:5). KEIN Text im Bild, keine Logos, keine Schrift, keine Collage, keine '
+    'Effekthascherei.\n'
+    '- Nutze nur, was zum Thema passt; erfinde keine Marken.\n'
+    'Gib AUSSCHLIESSLICH den fertigen Bild-Prompt als Fließtext zurück (2–4 Sätze) – keine Überschrift, '
+    'keine Erklärung, keine Varianten.')
+
 
 def _content_prompts() -> dict:
     d = _lade(CONTENT_SPEC_PATH, None)
@@ -208,7 +223,8 @@ def _content_prompts() -> dict:
         d = {}
     return {'kurator': d.get('kurator') or KURATOR_DEFAULT,
             'texter': d.get('texter') or TEXTER_DEFAULT,
-            'pruefer': d.get('pruefer') or PRUEFER_DEFAULT}
+            'pruefer': d.get('pruefer') or PRUEFER_DEFAULT,
+            'bildprompt': d.get('bildprompt') or BILDPROMPT_DEFAULT}
 
 
 def _ki_text(system: str, user: str, max_tokens: int = 4000) -> str:
@@ -249,7 +265,10 @@ def _content_pipeline(thema: str, kontext_md: str = '') -> dict:
     pruef = _ki_text(p['pruefer'],
                      f'Faktengrundlage:\n\n{fakt}\n\n'
                      f'LinkedIn-Entwurf:\n{linkedin}\n\nInstagram-Entwurf:\n{instagram}', 2000)
-    return {'brief': brief, 'linkedin': linkedin, 'instagram': instagram, 'pruef': pruef}
+    bildprompt = _ki_text(p['bildprompt'],
+                          f'Thema/Briefing:\n\n{brief}\n\nInstagram-Fassung:\n{instagram}', 800)
+    return {'brief': brief, 'linkedin': linkedin, 'instagram': instagram,
+            'pruef': pruef, 'bildprompt': bildprompt}
 
 
 def _content_laden():
@@ -364,7 +383,7 @@ def _bild_fuer_content(cid: str):
     eintrag = next((e for e in liste if e.get('id') == cid), None)
     if not eintrag:
         raise RuntimeError('Eintrag nicht gefunden.')
-    prompt = _bild_briefing(eintrag.get('instagram') or '')
+    prompt = (eintrag.get('bildprompt') or '').strip() or _bild_briefing(eintrag.get('instagram') or '')
     refs = [str(REFS_DIR / n) for n in _ref_liste()]
     daten, mime = _erzeuge_bild(prompt, refs)
     ext = _BILD_EXT.get(mime, '.png')
@@ -387,6 +406,13 @@ def _bild_fuer_content(cid: str):
 
 def _bild_block(eintrag: dict, cid: str, gemini_aktiv: bool, hat_refs: bool) -> str:
     bild = eintrag.get('bild')
+    prompt = (eintrag.get('bildprompt') or '').strip() or _bild_briefing(eintrag.get('instagram') or '')
+    prompt_form = (
+        '<div class="hint" style="margin:10px 0 2px">Bild-Prompt (KI-Vorschlag &ndash; editierbar, deine Freigabe)</div>'
+        f'<form method="post" action="/content/{_esc(cid)}/bildprompt">'
+        f'<textarea name="bildprompt" rows="4" style="width:100%">{_esc(prompt)}</textarea>'
+        '<div class="row" style="margin-top:4px"><button class="btn ghost" type="submit">Prompt speichern</button></div>'
+        '</form>')
     vorschau = ''
     if bild:
         vorschau = (
@@ -402,8 +428,8 @@ def _bild_block(eintrag: dict, cid: str, gemini_aktiv: bool, hat_refs: bool) -> 
     else:
         grund = 'GEMINI_API_KEY fehlt' if not gemini_aktiv else 'kein Referenzfoto hinterlegt'
         steuer = f'<span class="hint">Bildgenerierung nicht möglich ({grund}).</span>'
-    return ('<div class="hint" style="margin:10px 0 2px">Instagram-Bild (aus dem Bild-Briefing)</div>'
-            + vorschau + f'<div class="row">{steuer}</div>')
+    return ('<div class="hint" style="margin:12px 0 2px">Instagram-Bild</div>' + prompt_form
+            + vorschau + f'<div class="row" style="margin-top:6px">{steuer}</div>')
 
 
 # ── Zugang (nur admin) ───────────────────────────────────────────────────────
@@ -1038,6 +1064,7 @@ def content_vorlagen(request: Request, ok: str = '', reset: str = ''):
               + feld('kurator', '1 · Kurator (Briefing)')
               + feld('texter', '2 · Texter (LinkedIn + Instagram)')
               + feld('pruefer', '3 · Prüfer (Ampel & Hinweise)')
+              + feld('bildprompt', '4 · Bild-Prompt-Designer (Nano Banana)')
               + '<div class="row" style="margin-top:10px">'
               '<button class="btn" type="submit">Speichern</button> '
               '<a class="btn ghost" href="/content/vorlagen?reset=1">Auf Standard zurücksetzen</a>'
@@ -1048,7 +1075,7 @@ def content_vorlagen(request: Request, ok: str = '', reset: str = ''):
 @app.post('/content/vorlagen')
 async def content_vorlagen_speichern(request: Request):
     form = await request.form()
-    d = {k: (form.get(k) or '').strip() for k in ('kurator', 'texter', 'pruefer')}
+    d = {k: (form.get(k) or '').strip() for k in ('kurator', 'texter', 'pruefer', 'bildprompt')}
     _sichere(CONTENT_SPEC_PATH, {k: v for k, v in d.items() if v})  # leer -> Standard
     return RedirectResponse('/content/vorlagen?ok=1', status_code=303)
 
@@ -1093,6 +1120,19 @@ def content_bild_datei(request: Request, name: str):
     p = BILDER_DIR / _sicherer_name(name)
     if p.is_file():
         return FileResponse(str(p))
+    return RedirectResponse('/content', status_code=303)
+
+
+@app.post('/content/{cid}/bildprompt')
+async def content_bildprompt_speichern(request: Request, cid: str):
+    form = await request.form()
+    txt = (form.get('bildprompt') or '').strip()
+    liste = _content_laden()
+    for e in liste:
+        if e.get('id') == cid:
+            e['bildprompt'] = txt
+            _sichere(CONTENT_PATH, liste)
+            break
     return RedirectResponse('/content', status_code=303)
 
 
