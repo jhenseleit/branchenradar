@@ -458,6 +458,12 @@ def _wetter_kontext() -> str:
     return ctx + '. Wähle Kleidung passend dazu.'
 
 
+def _heute_zeile() -> str:
+    now = datetime.now()
+    return (f'Heutiges Datum: {now.strftime("%d.%m.%Y")} ({_jahreszeit(now.month)}). Beziehe alle '
+            'Zeitangaben hierauf; erfinde keine falschen Monate, Jahreszeiten oder Zeitpunkte.')
+
+
 def _content_pipeline(thema: str, kontext_md: str = '') -> dict:
     """Drei verkettete Agenten: Kurator -> Texter -> Prüfer. Reine Text-Ausgaben."""
     p = _content_prompts()
@@ -465,20 +471,22 @@ def _content_pipeline(thema: str, kontext_md: str = '') -> dict:
                                   'erfinde keine Zahlen.)')
     thema_txt = thema.strip() or '(Kein Thema vorgegeben – wähle den stärksten Aufhänger aus der Faktengrundlage.)'
 
+    heute = _heute_zeile()
     brief = _ki_text(_mit_profil(p['kurator'], mit_stil=True),
-                     f'Thema/Aufhänger vom Nutzer:\n{thema_txt}\n\n'
+                     f'{heute}\n\nThema/Aufhänger vom Nutzer:\n{thema_txt}\n\n'
                      f'Faktengrundlage (aktueller Branchenüberblick):\n\n{fakt}', 2000)
     doppel = _ki_text(_mit_profil(p['texter'], mit_stil=True),
-                      f'Briefing:\n\n{brief}\n\nFaktengrundlage:\n\n{fakt}', 4500)
+                      f'{heute}\n\nBriefing:\n\n{brief}\n\nFaktengrundlage:\n\n{fakt}', 4500)
     linkedin, newsletter, instagram = _split_kanaele(doppel)
     pruef = _ki_text(_mit_profil(p['pruefer'], mit_stil=True),
-                     f'Faktengrundlage:\n\n{fakt}\n\nLinkedIn-Post:\n{linkedin}\n\n'
+                     f'{heute}\n\nFaktengrundlage:\n\n{fakt}\n\nLinkedIn-Post:\n{linkedin}\n\n'
                      f'LinkedIn-Newsletter:\n{newsletter}\n\nInstagram-Entwurf:\n{instagram}', 2200)
     bildprompt = _ki_text(_mit_profil(p['bildprompt']),
                           f'Wetter-Kontext (für ein aktuelles, wetterpassendes Outfit):\n{_wetter_kontext()}\n\n'
                           f'Thema/Briefing:\n\n{brief}\n\nInstagram-Fassung:\n{instagram}', 800)
     ig_experte = _ki_text(_mit_profil(p['ig_experte'], mit_stil=True),
-                          f'Thema/Briefing:\n\n{brief}\n\nLinkedIn-Post (von den anderen Agenten):\n{linkedin}'
+                          f'{heute}\n\nThema/Briefing:\n\n{brief}\n\n'
+                          f'LinkedIn-Post (von den anderen Agenten):\n{linkedin}'
                           f'\n\nBisheriger Instagram-Entwurf:\n{instagram}', 2000)
     return {'brief': brief, 'linkedin': linkedin, 'newsletter': newsletter, 'instagram': instagram,
             'pruef': pruef, 'bildprompt': bildprompt, 'ig_experte': ig_experte}
@@ -538,7 +546,7 @@ def _thema_loeschen(tid: str):
 def _ideen_generieren(fokus: str = '', anzahl: int = 12):
     """KI schlägt Themen aus dem Profil (+ optionalem Fokus) vor. -> Liste von Strings."""
     p = _content_prompts()
-    user = f'Schlage {anzahl} konkrete Themen/Aufhänger vor.'
+    user = f'{_heute_zeile()}\n\nSchlage {anzahl} konkrete Themen/Aufhänger vor.'
     if (fokus or '').strip():
         user += f'\n\nAktueller Fokus / Wunschrichtung des Nutzers:\n{fokus.strip()}'
     text = _ki_text(_mit_profil(p['ideen'], mit_stil=True), user, 1500)
@@ -845,6 +853,25 @@ def _slideshow_erzeugen(cid: str):
             e['reel_caption'] = caption
             e['reel_slides'] = out
             e['reel_ts'] = datetime.now().strftime('%d.%m.%Y %H:%M')
+            _sichere(CONTENT_PATH, liste)
+            break
+
+
+def _ig_experte_pruefen(cid: str):
+    """Lässt den Instagram-Experten einen bestehenden Eintrag auf Basis seiner Texte + Bild-Konzept prüfen."""
+    liste = _content_laden()
+    eintrag = next((e for e in liste if e.get('id') == cid), None)
+    if not eintrag:
+        raise RuntimeError('Eintrag nicht gefunden.')
+    p = _content_prompts()
+    user = (f'{_heute_zeile()}\n\nThema/Briefing:\n\n{eintrag.get("brief") or ""}\n\n'
+            f'LinkedIn-Post (von den anderen Agenten):\n{eintrag.get("linkedin") or ""}\n\n'
+            f'Bisheriger Instagram-Entwurf:\n{eintrag.get("instagram") or ""}\n\n'
+            f'Geplantes Bild-Konzept (Prompt):\n{(eintrag.get("bildprompt") or "").strip() or "(kein Bild-Prompt)"}')
+    bericht = _ki_text(_mit_profil(p['ig_experte'], mit_stil=True), user, 2000)
+    for e in liste:
+        if e.get('id') == cid:
+            e['ig_experte'] = bericht
             _sichere(CONTENT_PATH, liste)
             break
 
@@ -1372,6 +1399,10 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
             cid = p.get('id') or ''
             thema_z = (f' &middot; <span style="color:var(--muted)">{_esc(p.get("thema"))}</span>'
                        if p.get('thema') else '')
+            igbtn = ((f'<form method="post" action="/content/{_esc(cid)}/igcheck" style="display:inline">'
+                      '<button class="btn ghost" type="submit">'
+                      f'{"Instagram-Experte neu prüfen" if p.get("ig_experte") else "Instagram-Experte prüfen"}'
+                      '</button></form>') if ki_aktiv else '')
             zeilen += (
                 '<div class="statusbox" style="margin-top:12px">'
                 f'<div class="hint" style="margin-bottom:6px">{_esc(p.get("datum") or "")}{thema_z}</div>'
@@ -1386,15 +1417,20 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
                 f'<div class="row" style="margin:4px 0 8px">{_kopier_btn("ai" + cid)}</div>'
                 '<div class="hint" style="margin:4px 0 2px">Instagram-Experte (Format · Caption · Strategie · Coaching)</div>'
                 f'<textarea id="ae{_esc(cid)}" rows="10" style="width:100%">{_esc(p.get("ig_experte") or "")}</textarea>'
-                f'<div class="row" style="margin-top:4px">{_kopier_btn("ae" + cid)}</div>'
+                f'<div class="row" style="margin-top:4px">{_kopier_btn("ae" + cid)} {igbtn}</div>'
                 + _bild_block(p, cid, gemini_aktiv, hat_refs)
                 + _reel_block(p, cid, gemini_aktiv, hat_refs)
                 + '<div class="row" style="margin-top:10px">'
                 f'<form method="post" action="/content/{_esc(cid)}/loeschen" style="display:inline" '
                 'onsubmit="return confirm(\'Eintrag löschen?\')">'
                 '<button class="btn ghost" type="submit">Löschen</button></form></div></div>')
+        alle_btn = ((' <form method="post" action="/content/igcheck-alle" style="display:inline" '
+                     "onsubmit=\"return confirm('Alle gespeicherten Inhalte vom Instagram-Experten prüfen "
+                     "lassen? Das kann einen Moment dauern.')\">"
+                     '<button class="btn ghost" type="submit">Alle prüfen (Instagram-Experte)</button>'
+                     '</form>') if ki_aktiv else '')
         archiv = ('<div class="step" style="margin-top:26px"><span class="ttl">Gespeicherte Inhalte '
-                  f'({len(posts)})</span></div>' + zeilen)
+                  f'({len(posts)})</span>{alle_btn}</div>' + zeilen)
 
     sicherung_karte = (
         '<div class="statusbox" style="margin-top:26px">'
@@ -1968,6 +2004,28 @@ async def content_reel(request: Request, cid: str):
     except Exception as e:  # noqa: BLE001
         return HTMLResponse(_seite(_content_html(hinweis='Slideshow-Reel konnte nicht erzeugt werden: '
                                                  + str(e)[:300]), request.state.user))
+    return RedirectResponse('/content', status_code=303)
+
+
+@app.post('/content/igcheck-alle', response_class=HTMLResponse)
+async def content_igcheck_alle(request: Request):
+    def _run():
+        for e in _content_laden():
+            try:
+                _ig_experte_pruefen(e.get('id'))
+            except Exception:  # noqa: BLE001
+                pass
+    await run_in_threadpool(_run)
+    return RedirectResponse('/content', status_code=303)
+
+
+@app.post('/content/{cid}/igcheck', response_class=HTMLResponse)
+async def content_igcheck(request: Request, cid: str):
+    try:
+        await run_in_threadpool(_ig_experte_pruefen, cid)
+    except Exception as e:  # noqa: BLE001
+        return HTMLResponse(_seite(_content_html(hinweis='Instagram-Experte fehlgeschlagen: '
+                                                 + str(e)[:250]), request.state.user))
     return RedirectResponse('/content', status_code=303)
 
 
