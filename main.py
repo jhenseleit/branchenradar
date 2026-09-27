@@ -56,7 +56,7 @@ GEMINI_BILD_FORMAT = os.environ.get('GEMINI_BILD_FORMAT', '4:5')  # Instagram-Ho
 WETTER_LAT = os.environ.get('WETTER_LAT', '49.38')
 WETTER_LON = os.environ.get('WETTER_LON', '11.93')
 WETTER_ORT = os.environ.get('WETTER_ORT', 'Oberpfalz')
-SLIDE_KICKER = os.environ.get('SLIDE_KICKER', 'SKYPORT · LIEFERANTENSICHT')  # Wortmarke auf der Text-Slide
+SLIDE_KICKER = os.environ.get('SLIDE_KICKER', '')  # optionale Wortmarke auf der Text-Slide (Default: keine)
 MAX_PAUSE = 14  # Fortsetzungen für pause_turn (Web-Such-Schleife)
 
 app = FastAPI(title=APP_NAME, docs_url=None, redoc_url=None)
@@ -330,7 +330,8 @@ BILDPROMPT_DEFAULT = (
     '(wärmer leichter, kühler mit Jacke, kalt mit Mantel), aber immer gepflegt und hochwertig. '
     'Komposition: Hochformat 4:5, die Person zu EINER Seite gesetzt, sodass auf der anderen genug ruhige, '
     'freie Fläche für eine spätere Textüberschrift bleibt. KEIN Text im Bild, keine Schrift, keine Logos, '
-    'keine Collage; erfinde keine Marken.\n'
+    'keine Firmen- oder Markennamen (insbesondere NICHT „Skyport") und keine beschrifteten Requisiten '
+    '(z. B. Tassen, Shirts, Schilder mit Aufdruck), keine Collage; erfinde keine Marken.\n'
     'Gib AUSSCHLIESSLICH den fertigen Bild-Prompt als Fließtext zurück (3–5 Sätze) – keine Überschrift, '
     'keine Erklärung, keine Varianten.')
 
@@ -636,7 +637,9 @@ def _erzeuge_bild(prompt: str, ref_paths, stil_paths=None):
             'Licht (goldene Töne) und eine gemütliche, lebendige Atmosphäre mit echter Ausstrahlung, kein '
             'kühler, klinisch-steriler oder glatter Corporate-Stockfoto-Look. Die abgebildete Person ist '
             'die Referenzperson aus den ersten beigefügten Fotos – wahre ihr Gesicht und ihre Identität '
-            'möglichst genau, gepflegtes Erscheinungsbild. Kein Text im Bild, keine Logos. Motiv: '
+            'möglichst genau, gepflegtes Erscheinungsbild. Kein Text im Bild, keine Logos, keine Firmen- '
+            'oder Markennamen (auch NICHT „Skyport") und keine beschrifteten Requisiten (Tassen/Shirts/'
+            'Schilder mit Aufdruck). Motiv: '
             + (prompt or '').strip())
     contents = [voll]
     for rp in ref_paths:
