@@ -757,13 +757,68 @@ def _wrap_text(draw, text: str, font, maxw: int):
     return lines
 
 
-def _textslide_rendern(headline: str, subline: str = '') -> bytes:
-    """Rendert eine reine Text-Slide (4:5) im Marken-Look – ohne Foto, mit „AI-generated"-Hinweis."""
+def _cover(im, W, H):
+    """Skaliert und beschneidet ein Bild mittig auf genau WxH (Fill)."""
+    iw, ih = im.size
+    scale = max(W / iw, H / ih)
+    nw, nh = max(W, int(iw * scale)), max(H, int(ih * scale))
+    im = im.resize((nw, nh))
+    x, y = (nw - W) // 2, (nh - H) // 2
+    return im.crop((x, y, x + W, y + H))
+
+
+def _textslide_bg_gemini():
+    """Erzeugt via Gemini einen hochwertigen, textfreien Hintergrund für die Text-Slide. -> bytes|None."""
+    key = os.environ.get('GEMINI_API_KEY')
+    if not key:
+        return None
+    try:
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=key)
+        prompt = ('Ein hochwertiger, ruhiger, minimalistischer Hintergrund für eine Statement-Grafik im '
+                  'Marken-Look: weiche, helle Töne mit einem dezenten Teal-/Petrol-Akzent, sanfte Struktur '
+                  'oder unscharfe Tiefe, gedämpft und edel, viel ruhige freie Fläche. KEIN Text, KEINE '
+                  'Schrift, KEINE Personen, KEINE Logos, keine Collage.')
+
+        def _call(mit_format):
+            cfg = {'response_modalities': ['IMAGE']}
+            if mit_format:
+                cfg['image_config'] = types.ImageConfig(aspect_ratio=GEMINI_BILD_FORMAT)
+            return client.models.generate_content(model=GEMINI_BILD_MODELL, contents=[prompt],
+                                                  config=types.GenerateContentConfig(**cfg))
+        try:
+            resp = _call(True)
+        except Exception:  # noqa: BLE001
+            resp = _call(False)
+        for part in (getattr(resp, 'parts', None) or []):
+            inline = getattr(part, 'inline_data', None)
+            if inline is not None and getattr(inline, 'data', None):
+                d = inline.data
+                if isinstance(d, str):
+                    import base64 as _b64
+                    d = _b64.b64decode(d)
+                return d
+    except Exception:  # noqa: BLE001 - Hintergrund ist optional, Fallback = schlichte Fläche
+        return None
+    return None
+
+
+def _textslide_rendern(headline: str, subline: str = '', bg_bytes=None) -> bytes:
+    """Rendert eine Text-Slide (4:5): optionaler Gemini-Hintergrund + exakter Text darüber."""
     from PIL import Image, ImageDraw
     W, H = 1080, 1350
-    bg, ink, accent, muted = (248, 250, 249), (15, 32, 45), (15, 118, 110), (88, 97, 110)
-    img = Image.new('RGB', (W, H), bg)
-    d = ImageDraw.Draw(img)
+    ink, accent, muted = (15, 32, 45), (15, 118, 110), (88, 97, 110)
+    hat_bg = False
+    if bg_bytes:
+        try:
+            img = _cover(Image.open(io.BytesIO(bg_bytes)).convert('RGB'), W, H)
+            hat_bg = True
+        except Exception:  # noqa: BLE001
+            img = Image.new('RGB', (W, H), (248, 250, 249))
+    else:
+        img = Image.new('RGB', (W, H), (248, 250, 249))
+    d = ImageDraw.Draw(img, 'RGBA')
     margin = 110
     maxw = W - 2 * margin
     size = 100
@@ -774,7 +829,13 @@ def _textslide_rendern(headline: str, subline: str = '') -> bytes:
         font = _font(size)
         lines = _wrap_text(d, headline, font, maxw)
     lh = int(size * 1.18)
-    y = margin + 70
+    y0 = margin + 70
+    block_h = lh * len(lines) + 24 + 10
+    if (subline or '').strip():
+        block_h += 46 + int(42 * 1.3) * len(_wrap_text(d, subline, _font(42), maxw))
+    if hat_bg:   # heller Scrim hinter dem Text, damit er auf jedem Hintergrund lesbar bleibt
+        d.rectangle([0, y0 - 46, W, y0 + block_h + 30], fill=(248, 250, 249, 214))
+    y = y0
     for ln in lines:
         d.text((margin, y), ln, font=font, fill=ink)
         y += lh
@@ -797,7 +858,7 @@ def _textslide_erzeugen(cid: str, headline: str = '', subline: str = ''):
     if not eintrag:
         raise RuntimeError('Eintrag nicht gefunden.')
     headline = (headline or '').strip() or _erste_zeile(eintrag.get('linkedin') or eintrag.get('instagram') or '')
-    daten = _textslide_rendern(headline, subline)
+    daten = _textslide_rendern(headline, subline, _textslide_bg_gemini())
     name = f'{cid}_t.png'
     _sichere_bytes(BILDER_DIR / name, daten)
     for e in liste:
@@ -1040,7 +1101,8 @@ def _bild_block(eintrag: dict, cid: str, gemini_aktiv: bool, hat_refs: bool) -> 
             f'<div class="row" style="margin-top:4px"><a class="btn ghost" href="/content/bild/{_esc(ts)}" '
             'download>Text-Slide herunterladen</a></div></div>')
     textslide_html = (
-        '<div class="hint" style="margin:14px 0 2px">Text-Slide (reine Aussage als Grafik, ohne Foto)</div>'
+        '<div class="hint" style="margin:14px 0 2px">Text-Slide (Aussage-Grafik &ndash; Hintergrund via '
+        'Gemini, Text exakt darübergelegt; ohne Foto von dir)</div>'
         + ts_vorschau
         + f'<form method="post" action="/content/{_esc(cid)}/textslide">'
         f'<textarea name="headline" rows="2" style="width:100%" '
