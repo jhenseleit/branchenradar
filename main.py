@@ -56,6 +56,7 @@ GEMINI_BILD_FORMAT = os.environ.get('GEMINI_BILD_FORMAT', '4:5')  # Instagram-Ho
 WETTER_LAT = os.environ.get('WETTER_LAT', '49.38')
 WETTER_LON = os.environ.get('WETTER_LON', '11.93')
 WETTER_ORT = os.environ.get('WETTER_ORT', 'Oberpfalz')
+SLIDE_KICKER = os.environ.get('SLIDE_KICKER', 'SKYPORT · LIEFERANTENSICHT')  # Wortmarke auf der Text-Slide
 MAX_PAUSE = 14  # Fortsetzungen für pause_turn (Web-Such-Schleife)
 
 app = FastAPI(title=APP_NAME, docs_url=None, redoc_url=None)
@@ -695,10 +696,15 @@ def _gemini_selftest() -> str:
         return 'FEHLER: ' + str(e)[:400]
 
 
-def _font(size: int):
+def _font(size: int, bold: bool = True):
     from PIL import ImageFont
-    for pfad in ('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
-                 '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'):
+    fett = ('/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf',
+            '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf')
+    normal = ('/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf',
+              '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+              '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf')
+    for pfad in (fett if bold else normal):
         try:
             return ImageFont.truetype(pfad, size)
         except OSError:
@@ -804,67 +810,90 @@ def _textslide_bg_gemini():
     return None
 
 
-def _textslide_rendern(headline: str, subline: str = '', bg_bytes=None) -> bytes:
-    """Rendert eine Text-Slide (4:5): optionaler Gemini-Hintergrund + exakter Text darüber."""
+def _draw_tracked(d, x, y, text, font, fill, spacing=5):
+    for ch in text:
+        d.text((x, y), ch, font=font, fill=fill)
+        x += d.textlength(ch, font=font) + spacing
+    return x
+
+
+def _textslide_rendern(headline: str, subline: str = '', bg_bytes=None, stil: str = 'hell') -> bytes:
+    """Rendert eine designte Text-Slide (4:5): Wortmarke + Aussage + Akzent + Subline,
+    hell oder dunkel, optional auf einem Gemini-Hintergrund, mit „AI-generated"-Hinweis."""
     from PIL import Image, ImageDraw
     W, H = 1080, 1350
-    ink, accent, muted = (15, 32, 45), (15, 118, 110), (88, 97, 110)
+    dunkel = (stil == 'dunkel')
+    if dunkel:
+        flaeche, ink, accent = (15, 32, 45), (247, 249, 250), (45, 212, 191)
+        muted, scrim = (150, 168, 180), (12, 26, 38, 170)
+    else:
+        flaeche, ink, accent = (246, 248, 248), (15, 32, 45), (15, 118, 110)
+        muted, scrim = (96, 106, 118), (246, 248, 248, 216)
     hat_bg = False
     if bg_bytes:
         try:
             img = _cover(Image.open(io.BytesIO(bg_bytes)).convert('RGB'), W, H)
             hat_bg = True
         except Exception:  # noqa: BLE001
-            img = Image.new('RGB', (W, H), (248, 250, 249))
+            img = Image.new('RGB', (W, H), flaeche)
     else:
-        img = Image.new('RGB', (W, H), (248, 250, 249))
+        img = Image.new('RGB', (W, H), flaeche)
     d = ImageDraw.Draw(img, 'RGBA')
-    margin = 110
+    margin = 96
     maxw = W - 2 * margin
-    size = 100
+
+    size = 106
     font = _font(size)
     lines = _wrap_text(d, headline, font, maxw)
-    while (len(lines) > 6 or int(size * 1.18) * len(lines) > H - 2 * margin - 200) and size > 46:
+    while (len(lines) > 6 or int(size * 1.16) * len(lines) > H - 2 * margin - 340) and size > 46:
         size -= 6
         font = _font(size)
         lines = _wrap_text(d, headline, font, maxw)
-    lh = int(size * 1.18)
-    y0 = margin + 70
-    block_h = lh * len(lines) + 24 + 10
-    if (subline or '').strip():
-        block_h += 46 + int(42 * 1.3) * len(_wrap_text(d, subline, _font(42), maxw))
-    if hat_bg:   # heller Scrim hinter dem Text, damit er auf jedem Hintergrund lesbar bleibt
-        d.rectangle([0, y0 - 46, W, y0 + block_h + 30], fill=(248, 250, 249, 214))
+    lh = int(size * 1.16)
+    kicker = (SLIDE_KICKER or '').strip().upper()
+    sub_lines = _wrap_text(d, subline, _font(40, bold=False), maxw) if (subline or '').strip() else []
+
+    block_h = ((56 if kicker else 0) + lh * len(lines) + 44
+               + (18 + int(40 * 1.32) * len(sub_lines) if sub_lines else 0))
+    y0 = max(margin, (H - block_h) // 2)
+    if hat_bg:
+        d.rectangle([0, y0 - 44, W, y0 + block_h + 30], fill=scrim)
+
     y = y0
+    if kicker:
+        _draw_tracked(d, margin, y, kicker, _font(30), accent, spacing=5)
+        y += 56
     for ln in lines:
         d.text((margin, y), ln, font=font, fill=ink)
         y += lh
-    y += 24
+    y += 16
     d.rectangle([margin, y, margin + 150, y + 10], fill=accent)
-    if (subline or '').strip():
-        y += 46
-        sf = _font(42)
-        for ln in _wrap_text(d, subline, sf, maxw):
+    y += 28
+    if sub_lines:
+        sf = _font(40, bold=False)
+        for ln in sub_lines:
             d.text((margin, y), ln, font=sf, fill=muted)
-            y += int(42 * 1.3)
+            y += int(40 * 1.32)
+
     buf = io.BytesIO()
     img.save(buf, format='PNG')
     return _wasserzeichen(buf.getvalue())
 
 
-def _textslide_erzeugen(cid: str, headline: str = '', subline: str = ''):
+def _textslide_erzeugen(cid: str, headline: str = '', subline: str = '', stil: str = 'hell'):
     liste = _content_laden()
     eintrag = next((e for e in liste if e.get('id') == cid), None)
     if not eintrag:
         raise RuntimeError('Eintrag nicht gefunden.')
     headline = (headline or '').strip() or _erste_zeile(eintrag.get('linkedin') or eintrag.get('instagram') or '')
-    daten = _textslide_rendern(headline, subline, _textslide_bg_gemini())
+    daten = _textslide_rendern(headline, subline, _textslide_bg_gemini(), stil)
     name = f'{cid}_t.png'
     _sichere_bytes(BILDER_DIR / name, daten)
     for e in liste:
         if e.get('id') == cid:
             e['textslide'] = name
             e['textslide_text'] = headline
+            e['textslide_stil'] = stil
             e['textslide_ts'] = datetime.now().strftime('%d.%m.%Y %H:%M')
             _sichere(CONTENT_PATH, liste)
             break
@@ -1108,6 +1137,10 @@ def _bild_block(eintrag: dict, cid: str, gemini_aktiv: bool, hat_refs: bool) -> 
         f'<textarea name="headline" rows="2" style="width:100%" '
         f'placeholder="Aussage / Kernsatz für die Slide">{_esc(ts_text)}</textarea>'
         '<div class="row" style="margin-top:4px">'
+        '<select name="stil" style="padding:8px 10px;border:1px solid var(--line);border-radius:6px">'
+        f'<option value="hell"{"" if eintrag.get("textslide_stil") == "dunkel" else " selected"}>Hell</option>'
+        f'<option value="dunkel"{" selected" if eintrag.get("textslide_stil") == "dunkel" else ""}>Dunkel</option>'
+        '</select>'
         f'<button class="btn ghost" type="submit">{"Text-Slide neu erstellen" if ts else "Text-Slide erstellen"}</button>'
         '</div></form>')
 
@@ -2200,8 +2233,9 @@ async def content_igcheck(request: Request, cid: str):
 async def content_textslide(request: Request, cid: str):
     form = await request.form()
     headline = (form.get('headline') or '').strip()
+    stil = 'dunkel' if (form.get('stil') == 'dunkel') else 'hell'
     try:
-        await run_in_threadpool(_textslide_erzeugen, cid, headline)
+        await run_in_threadpool(_textslide_erzeugen, cid, headline, '', stil)
     except Exception as e:  # noqa: BLE001
         return HTMLResponse(_seite(_content_html(hinweis='Text-Slide fehlgeschlagen: '
                                                  + str(e)[:250]), request.state.user))
