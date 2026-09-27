@@ -343,6 +343,24 @@ REEL_DEFAULT = (
     '(4–6 solcher [SLIDE]-Blöcke; die Slides sollen eine erkennbare Reihenfolge/Steigerung haben). Keine '
     'Emojis. Gib nur „Caption:" und die [SLIDE]-Blöcke zurück.')
 
+IG_EXPERTE_DEFAULT = (
+    'Du bist ein erfahrener Instagram-Experte und -Coach für die Person aus dem Profil oben. Du bekommst '
+    'das Thema/Briefing und den bisherigen Instagram-Entwurf und machst daraus etwas, das auf Instagram '
+    'wirklich funktioniert – im Ton der Person (Profil und Schreibproben beachten), nach aktuellen '
+    'Kriterien (2026).\n\n'
+    'Gib einen strukturierten Bericht als Markdown mit GENAU diesen Abschnitten zurück:\n'
+    '1. **Format-Empfehlung:** Einzelbild, Carousel/Slideshow oder Reel? Eine klare Empfehlung mit kurzer '
+    'Begründung, was für dieses Thema am besten zieht.\n'
+    '2. **Optimierte Caption:** die fertige, verbesserte Caption – scroll-stoppende erste Zeile (Hook), '
+    'Mehrwert sofort, gut lesbar in kurzen Absätzen, am Ende ein klarer, unaufdringlicher CTA '
+    '(speichern/kommentieren/teilen). Keine Emojis, im Ton der Person. Hashtags nur 0–5 sehr gezielte oder '
+    'keine; relevante Suchbegriffe stattdessen in die Caption.\n'
+    '3. **Reichweite & Strategie:** 3–5 konkrete Hebel für genau dieses Thema (Keywords/SEO statt '
+    'Hashtags, sinnvoller Posting-Zeitpunkt/Frequenz, wie man Kommentare/Saves/Shares provoziert, '
+    'optional 1–2 alternative Hook-Zeilen).\n'
+    '4. **Coach-Hinweise:** 3–5 kurze, konkrete Punkte, was am bisherigen Entwurf besser geht und warum.\n'
+    'Sei konkret und ehrlich, kein Beratersprech, keine Floskeln.')
+
 IDEEN_DEFAULT = (
     'Du bist Themen-Ideengeber für die Person aus dem Profil oben.\n\n'
     'Schlage konkrete, posting-würdige Themen/Aufhänger vor, die zu ihrem Profil, ihren Kernthemen und '
@@ -363,6 +381,7 @@ def _content_prompts() -> dict:
             'pruefer': d.get('pruefer') or PRUEFER_DEFAULT,
             'bildprompt': d.get('bildprompt') or BILDPROMPT_DEFAULT,
             'reel': d.get('reel') or REEL_DEFAULT,
+            'ig_experte': d.get('ig_experte') or IG_EXPERTE_DEFAULT,
             'ideen': d.get('ideen') or IDEEN_DEFAULT}
 
 
@@ -458,8 +477,11 @@ def _content_pipeline(thema: str, kontext_md: str = '') -> dict:
     bildprompt = _ki_text(_mit_profil(p['bildprompt']),
                           f'Wetter-Kontext (für ein aktuelles, wetterpassendes Outfit):\n{_wetter_kontext()}\n\n'
                           f'Thema/Briefing:\n\n{brief}\n\nInstagram-Fassung:\n{instagram}', 800)
+    ig_experte = _ki_text(_mit_profil(p['ig_experte'], mit_stil=True),
+                          f'Thema/Briefing:\n\n{brief}\n\nLinkedIn-Post (von den anderen Agenten):\n{linkedin}'
+                          f'\n\nBisheriger Instagram-Entwurf:\n{instagram}', 2000)
     return {'brief': brief, 'linkedin': linkedin, 'newsletter': newsletter, 'instagram': instagram,
-            'pruef': pruef, 'bildprompt': bildprompt}
+            'pruef': pruef, 'bildprompt': bildprompt, 'ig_experte': ig_experte}
 
 
 def _content_laden():
@@ -474,13 +496,14 @@ def _content_speichern(eintrag: dict) -> str:
     return eintrag['id']
 
 
-def _content_aktualisieren(cid: str, linkedin: str, newsletter: str, instagram: str):
+def _content_aktualisieren(cid: str, linkedin: str, newsletter: str, instagram: str, ig_experte: str):
     liste = _content_laden()
     for e in liste:
         if e.get('id') == cid:
             e['linkedin'] = (linkedin or '').strip()
             e['newsletter'] = (newsletter or '').strip()
             e['instagram'] = (instagram or '').strip()
+            e['ig_experte'] = (ig_experte or '').strip()
             _sichere(CONTENT_PATH, liste)
             return
 
@@ -1260,6 +1283,7 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
         li = res.get('linkedin') or ''
         nl = res.get('newsletter') or ''
         ig = res.get('instagram') or ''
+        ige = res.get('ig_experte') or ''
         ergebnis = (
             '<div class="statusbox" style="margin-top:14px">'
             '<div class="step"><span class="ttl">1 &middot; Briefing (Kurator)</span></div>'
@@ -1281,7 +1305,11 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
             '<div class="statusbox" style="margin-top:14px">'
             '<div class="step"><span class="ttl">Instagram-Fassung (inkl. Bild-Briefing)</span></div>'
             f'<textarea id="cig" name="instagram" rows="12" style="width:100%;margin-top:8px">{_esc(ig)}</textarea>'
-            f'<div class="row">{_kopier_btn("cig")} '
+            f'<div class="row">{_kopier_btn("cig")}</div></div>'
+            '<div class="statusbox laeuft" style="margin-top:14px">'
+            '<div class="step"><span class="ttl">Instagram-Experte &middot; Format · Caption · Strategie · Coaching</span></div>'
+            f'<textarea id="cige" name="ig_experte" rows="16" style="width:100%;margin-top:8px">{_esc(ige)}</textarea>'
+            f'<div class="row">{_kopier_btn("cige")} '
             '<button class="btn" type="submit">Bearbeitete Fassungen speichern</button></div></div>'
             '</form>')
 
@@ -1355,7 +1383,10 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
                 f'<div class="row" style="margin:4px 0 8px">{_kopier_btn("an" + cid)}</div>'
                 '<div class="hint" style="margin:4px 0 2px">Instagram (inkl. Bild-Briefing)</div>'
                 f'<textarea id="ai{_esc(cid)}" rows="6" style="width:100%">{_esc(p.get("instagram") or "")}</textarea>'
-                f'<div class="row" style="margin-top:4px">{_kopier_btn("ai" + cid)}</div>'
+                f'<div class="row" style="margin:4px 0 8px">{_kopier_btn("ai" + cid)}</div>'
+                '<div class="hint" style="margin:4px 0 2px">Instagram-Experte (Format · Caption · Strategie · Coaching)</div>'
+                f'<textarea id="ae{_esc(cid)}" rows="10" style="width:100%">{_esc(p.get("ig_experte") or "")}</textarea>'
+                f'<div class="row" style="margin-top:4px">{_kopier_btn("ae" + cid)}</div>'
                 + _bild_block(p, cid, gemini_aktiv, hat_refs)
                 + _reel_block(p, cid, gemini_aktiv, hat_refs)
                 + '<div class="row" style="margin-top:10px">'
@@ -1679,8 +1710,9 @@ async def content_speichern(request: Request):
     li = (form.get('linkedin') or '').strip()
     nl = (form.get('newsletter') or '').strip()
     ig = (form.get('instagram') or '').strip()
+    ige = (form.get('ig_experte') or '').strip()
     if cid:
-        _content_aktualisieren(cid, li, nl, ig)
+        _content_aktualisieren(cid, li, nl, ig, ige)
     return RedirectResponse('/content', status_code=303)
 
 
@@ -1708,7 +1740,8 @@ def content_vorlagen(request: Request, ok: str = '', reset: str = ''):
               + feld('pruefer', '3 · Prüfer (Ampel & Hinweise)')
               + feld('bildprompt', '4 · Bild-Prompt-Designer (Nano Banana)')
               + feld('reel', '5 · Reel-Slideshow (Instagram)')
-              + feld('ideen', '6 · Themen-Ideengeber')
+              + feld('ig_experte', '6 · Instagram-Experte')
+              + feld('ideen', '7 · Themen-Ideengeber')
               + '<div class="row" style="margin-top:10px">'
               '<button class="btn" type="submit">Speichern</button> '
               '<a class="btn ghost" href="/content/vorlagen?reset=1">Auf Standard zurücksetzen</a>'
@@ -1720,7 +1753,7 @@ def content_vorlagen(request: Request, ok: str = '', reset: str = ''):
 async def content_vorlagen_speichern(request: Request):
     form = await request.form()
     d = {k: (form.get(k) or '').strip()
-         for k in ('kurator', 'texter', 'pruefer', 'bildprompt', 'reel', 'ideen')}
+         for k in ('kurator', 'texter', 'pruefer', 'bildprompt', 'reel', 'ig_experte', 'ideen')}
     _sichere(CONTENT_SPEC_PATH, {k: v for k, v in d.items() if v})  # leer -> Standard
     return RedirectResponse('/content/vorlagen?ok=1', status_code=303)
 
