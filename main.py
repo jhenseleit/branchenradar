@@ -305,6 +305,12 @@ BILDPROMPT_DEFAULT = (
     'Handlung, Umgebung oder passende Requisiten, die zum konkreten Beitrag passen) und darf NIE ein '
     'beliebiges, themenfremdes Porträt oder ein halb leeres Bild sein. Das Bild soll sowohl im LinkedIn- '
     'als auch im Instagram-Feed funktionieren.\n\n'
+    'WICHTIG – Fokus & Story: Die Referenzperson (Jörn) ist der ALLEINIGE Protagonist – zeige möglichst '
+    'KEINE weiteren Personen/Kolleg*innen (allenfalls EINE dezent unscharfe Person weit im Hintergrund, '
+    'und nur, wenn die Story es wirklich braucht). Das Bild trägt die STORY/Kernaussage des Beitrags über '
+    'eine klare, thementragende Bildidee – eine konkrete Handlung, ein Detail oder ein Requisit, das den '
+    'Punkt des Themas andeutet (z. B. ein Dokument in der Hand, ein Koffer, ein Bildschirm mit einer '
+    'Zahl). Kein beliebiges Büro-Porträt ohne Aussage.\n\n'
     'Bestimme ZUERST aus Thema/Beitrag, ob es BERUFLICH oder PRIVAT/GESELLSCHAFTLICH ist, und wähle '
     'Umgebung UND Outfit entsprechend:\n'
     '• BERUFLICH (Skyport, Vertrieb, Handel, Branche): Wähle eine Umgebung aus Jörns Repertoire: '
@@ -359,6 +365,9 @@ IG_EXPERTE_DEFAULT = (
     'Hashtags, sinnvoller Posting-Zeitpunkt/Frequenz, wie man Kommentare/Saves/Shares provoziert, '
     'optional 1–2 alternative Hook-Zeilen).\n'
     '4. **Coach-Hinweise:** 3–5 kurze, konkrete Punkte, was am bisherigen Entwurf besser geht und warum.\n'
+    '5. **Bild/Visual:** Beurteile das geplante Bild-Konzept – trägt es die STORY des Beitrags? Zeigt es '
+    'die Person als alleinigen Protagonisten OHNE unnötige Kolleg*innen? Gib bei Bedarf einen konkreten, '
+    'besseren Bild-Prompt-Vorschlag mit einer klaren, thementragenden Bildidee (Handlung/Detail/Requisit).\n'
     'Sei konkret und ehrlich, kein Beratersprech, keine Floskeln.')
 
 IDEEN_DEFAULT = (
@@ -487,7 +496,8 @@ def _content_pipeline(thema: str, kontext_md: str = '') -> dict:
     ig_experte = _ki_text(_mit_profil(p['ig_experte'], mit_stil=True),
                           f'{heute}\n\nThema/Briefing:\n\n{brief}\n\n'
                           f'LinkedIn-Post (von den anderen Agenten):\n{linkedin}'
-                          f'\n\nBisheriger Instagram-Entwurf:\n{instagram}', 2000)
+                          f'\n\nBisheriger Instagram-Entwurf:\n{instagram}'
+                          f'\n\nGeplantes Bild-Konzept (Prompt):\n{bildprompt}', 2000)
     return {'brief': brief, 'linkedin': linkedin, 'newsletter': newsletter, 'instagram': instagram,
             'pruef': pruef, 'bildprompt': bildprompt, 'ig_experte': ig_experte}
 
