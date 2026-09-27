@@ -735,6 +735,80 @@ def _wasserzeichen(daten: bytes, text: str = 'AI-generated') -> bytes:
     return out.getvalue()
 
 
+def _erste_zeile(text: str) -> str:
+    for ln in (text or '').splitlines():
+        ln = ln.strip()
+        if ln:
+            return ln
+    return ''
+
+
+def _wrap_text(draw, text: str, font, maxw: int):
+    lines, cur = [], ''
+    for wort in (text or '').split():
+        test = (cur + ' ' + wort).strip()
+        if draw.textlength(test, font=font) <= maxw or not cur:
+            cur = test
+        else:
+            lines.append(cur)
+            cur = wort
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def _textslide_rendern(headline: str, subline: str = '') -> bytes:
+    """Rendert eine reine Text-Slide (4:5) im Marken-Look – ohne Foto, mit „AI-generated"-Hinweis."""
+    from PIL import Image, ImageDraw
+    W, H = 1080, 1350
+    bg, ink, accent, muted = (248, 250, 249), (15, 32, 45), (15, 118, 110), (88, 97, 110)
+    img = Image.new('RGB', (W, H), bg)
+    d = ImageDraw.Draw(img)
+    margin = 110
+    maxw = W - 2 * margin
+    size = 100
+    font = _font(size)
+    lines = _wrap_text(d, headline, font, maxw)
+    while (len(lines) > 6 or int(size * 1.18) * len(lines) > H - 2 * margin - 200) and size > 46:
+        size -= 6
+        font = _font(size)
+        lines = _wrap_text(d, headline, font, maxw)
+    lh = int(size * 1.18)
+    y = margin + 70
+    for ln in lines:
+        d.text((margin, y), ln, font=font, fill=ink)
+        y += lh
+    y += 24
+    d.rectangle([margin, y, margin + 150, y + 10], fill=accent)
+    if (subline or '').strip():
+        y += 46
+        sf = _font(42)
+        for ln in _wrap_text(d, subline, sf, maxw):
+            d.text((margin, y), ln, font=sf, fill=muted)
+            y += int(42 * 1.3)
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    return _wasserzeichen(buf.getvalue())
+
+
+def _textslide_erzeugen(cid: str, headline: str = '', subline: str = ''):
+    liste = _content_laden()
+    eintrag = next((e for e in liste if e.get('id') == cid), None)
+    if not eintrag:
+        raise RuntimeError('Eintrag nicht gefunden.')
+    headline = (headline or '').strip() or _erste_zeile(eintrag.get('linkedin') or eintrag.get('instagram') or '')
+    daten = _textslide_rendern(headline, subline)
+    name = f'{cid}_t.png'
+    _sichere_bytes(BILDER_DIR / name, daten)
+    for e in liste:
+        if e.get('id') == cid:
+            e['textslide'] = name
+            e['textslide_text'] = headline
+            e['textslide_ts'] = datetime.now().strftime('%d.%m.%Y %H:%M')
+            _sichere(CONTENT_PATH, liste)
+            break
+
+
 def _bild_fuer_content(cid: str):
     """Erzeugt ein Bild für den gespeicherten Content-Eintrag, Ablage unter /data/bilder."""
     liste = _content_laden()
@@ -954,6 +1028,27 @@ def _bild_block(eintrag: dict, cid: str, gemini_aktiv: bool, hat_refs: bool) -> 
                     'verschiedenen Umgebungen (lade dir die beste herunter)</div>'
                     f'<div>{kacheln}</div>')
 
+    # Text-Slide (ohne Foto) – zusätzliche Option, serverseitig gerendert, kein Gemini nötig
+    ts = eintrag.get('textslide')
+    ts_text = (eintrag.get('textslide_text') or '').strip() or _erste_zeile(
+        eintrag.get('linkedin') or eintrag.get('instagram') or '')
+    ts_vorschau = ''
+    if ts:
+        ts_vorschau = (
+            f'<div style="margin:6px 0"><img src="/content/bild/{_esc(ts)}" alt="" '
+            'style="max-width:200px;border:1px solid var(--line);border-radius:8px;display:block">'
+            f'<div class="row" style="margin-top:4px"><a class="btn ghost" href="/content/bild/{_esc(ts)}" '
+            'download>Text-Slide herunterladen</a></div></div>')
+    textslide_html = (
+        '<div class="hint" style="margin:14px 0 2px">Text-Slide (reine Aussage als Grafik, ohne Foto)</div>'
+        + ts_vorschau
+        + f'<form method="post" action="/content/{_esc(cid)}/textslide">'
+        f'<textarea name="headline" rows="2" style="width:100%" '
+        f'placeholder="Aussage / Kernsatz für die Slide">{_esc(ts_text)}</textarea>'
+        '<div class="row" style="margin-top:4px">'
+        f'<button class="btn ghost" type="submit">{"Text-Slide neu erstellen" if ts else "Text-Slide erstellen"}</button>'
+        '</div></form>')
+
     # EIN Formular: „Bild erzeugen" nimmt genau den Text aus dem Feld (kein Prompt-Verlust mehr).
     return ('<div class="hint" style="margin:12px 0 2px">Bild (LinkedIn &amp; Instagram)</div>' + vorschau
             + '<div class="hint" style="margin:6px 0 2px">Bild-Prompt (KI-Vorschlag &ndash; editierbar; '
@@ -962,7 +1057,7 @@ def _bild_block(eintrag: dict, cid: str, gemini_aktiv: bool, hat_refs: bool) -> 
             f'<textarea name="bildprompt" rows="4" style="width:100%">{_esc(prompt)}</textarea>'
             '<div class="row" style="margin-top:6px">'
             '<button class="btn ghost" type="submit">Prompt speichern</button>'
-            + erzeugen + '</div></form>' + var_html)
+            + erzeugen + '</div></form>' + var_html + textslide_html)
 
 
 # ── Zugang (nur admin) ───────────────────────────────────────────────────────
@@ -2035,6 +2130,18 @@ async def content_igcheck(request: Request, cid: str):
         await run_in_threadpool(_ig_experte_pruefen, cid)
     except Exception as e:  # noqa: BLE001
         return HTMLResponse(_seite(_content_html(hinweis='Instagram-Experte fehlgeschlagen: '
+                                                 + str(e)[:250]), request.state.user))
+    return RedirectResponse('/content', status_code=303)
+
+
+@app.post('/content/{cid}/textslide', response_class=HTMLResponse)
+async def content_textslide(request: Request, cid: str):
+    form = await request.form()
+    headline = (form.get('headline') or '').strip()
+    try:
+        await run_in_threadpool(_textslide_erzeugen, cid, headline)
+    except Exception as e:  # noqa: BLE001
+        return HTMLResponse(_seite(_content_html(hinweis='Text-Slide fehlgeschlagen: '
                                                  + str(e)[:250]), request.state.user))
     return RedirectResponse('/content', status_code=303)
 
