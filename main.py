@@ -282,7 +282,7 @@ KURATOR_DEFAULT = (
 TEXTER_DEFAULT = (
     'Du schreibst fertige Social-Media-Beiträge für die Person aus dem Profil oben.\n\n'
     f'Tonregeln für BEIDE Kanäle: {_TONREGELN}\n\n'
-    'Erzeuge aus dem Briefing DREI Fassungen desselben Themas und trenne sie EXAKT mit diesen '
+    'Erzeuge aus dem Briefing ZWEI Fassungen desselben Themas und trenne sie EXAKT mit diesen '
     'Markierungen, jeweils in einer eigenen Zeile:\n'
     '[LINKEDIN]\n'
     'Der LinkedIn-Beitrag (Post): ausgearbeitet und substanziell, ca. 180–320 Wörter. FOLGE DEM FORMAT, '
@@ -293,12 +293,6 @@ TEXTER_DEFAULT = (
     'mit einer Frage enden. Anrede in der Regel „Sie". Absätze mit Luft, gesprochenes Register. Hashtags spielen kaum noch eine Rolle: '
     'höchstens 0–3 sehr gezielte am Ende (oder gar keine), keine Hashtag-Wolke; relevante Suchbegriffe '
     'lieber direkt in den Text.\n'
-    '[NEWSLETTER]\n'
-    'Der LinkedIn-Newsletter zum selben Thema, aus Lieferantensicht – länger und ausführlicher als der '
-    'Post: erste Zeile „Titel:" mit einem prägnanten Titel, dann 300–600 Wörter Fließtext mit klarem '
-    'Bogen (Einstieg, zwei bis drei Aspekte – bei Bedarf mit kurzen Zwischenüberschriften – und ein '
-    'Abschluss, der einordnet statt zu werben), mit klarer, zugespitzter Haltung. Gleicher Ton, keine '
-    'Emojis, keine Hashtags.\n'
     '[INSTAGRAM]\n'
     'Die Instagram-Fassung nach aktuellen Kriterien, gleicher fachlicher Ton, keine Emojis: eine starke '
     'Hook in der ERSTEN Zeile (vor dem „mehr anzeigen"), sofort Mehrwert/Substanz, gut lesbar in kurzen '
@@ -316,7 +310,7 @@ PRUEFER_DEFAULT = (
     f'Prüfe die beiden Entwürfe streng gegen die Faktengrundlage und die Tonregeln: {_TONREGELN}\n\n'
     'Gib einen knappen Prüfbericht als Markdown zurück:\n'
     '- **LinkedIn-Post – Ampel:** Grün/Gelb/Rot, mit den konkreten Fundstellen.\n'
-    '- **LinkedIn-Newsletter – Ampel:** Grün/Gelb/Rot, mit den konkreten Fundstellen.\n'
+
     '- **Instagram – Ampel:** Grün/Gelb/Rot, mit den konkreten Fundstellen.\n\n'
     'Prüfkriterien: (1) Externe Zahlen müssen in der Faktengrundlage belegt sein – markiere unbelegte '
     'externe Zahlen. Skyport-EIGENE Kennzahlen aus dem Profil gelten als belegt und brauchen KEINEN '
@@ -453,15 +447,19 @@ def _ki_text(system: str, user: str, max_tokens: int = 4000) -> str:
 
 
 def _split_kanaele(text: str):
-    """Zerlegt die Texter-Ausgabe an [LINKEDIN]/[NEWSLETTER]/[INSTAGRAM] in drei Fassungen."""
+    """Zerlegt die Texter-Ausgabe an [LINKEDIN]/[INSTAGRAM] in zwei Fassungen.
+
+    Der LinkedIn-Newsletter erscheint monatlich und hat mit den Posts nichts zu
+    tun - er wird hier nicht mehr miterzeugt. Aeltere Ausgaben mit der alten
+    [NEWSLETTER]-Markierung werden trotzdem sauber getrennt."""
     rest = text or ''
-    ig = nl = ''
+    ig = ''
     if '[INSTAGRAM]' in rest:
         rest, ig = rest.split('[INSTAGRAM]', 1)
     if '[NEWSLETTER]' in rest:
-        rest, nl = rest.split('[NEWSLETTER]', 1)
+        rest = rest.split('[NEWSLETTER]', 1)[0]
     li = rest.replace('[LINKEDIN]', '').strip()
-    return li, nl.strip(), ig.strip()
+    return li, ig.strip()
 
 
 def _jahreszeit(monat: int) -> str:
@@ -532,10 +530,10 @@ def _content_pipeline(thema: str, kontext_md: str = '') -> dict:
                      f'Faktengrundlage (aktueller Branchenüberblick):\n\n{fakt}', 2000)
     doppel = _ki_text(_mit_profil(p['texter'], mit_stil=True),
                       f'{heute}\n\nBriefing:\n\n{brief}\n\nFaktengrundlage:\n\n{fakt}', 4500)
-    linkedin, newsletter, instagram = _split_kanaele(doppel)
+    linkedin, instagram = _split_kanaele(doppel)
     pruef = _ki_text(_mit_profil(p['pruefer'], mit_stil=True),
                      f'{heute}\n\nFaktengrundlage:\n\n{fakt}\n\nLinkedIn-Post:\n{linkedin}\n\n'
-                     f'LinkedIn-Newsletter:\n{newsletter}\n\nInstagram-Entwurf:\n{instagram}', 2200)
+                     f'Instagram-Entwurf:\n{instagram}', 2200)
     bildprompt = _ki_text(_mit_profil(p['bildprompt']),
                           f'Wetter-Kontext (für ein aktuelles, wetterpassendes Outfit):\n{_wetter_kontext()}\n\n'
                           f'Thema/Briefing:\n\n{brief}\n\nInstagram-Fassung:\n{instagram}', 800)
@@ -544,7 +542,7 @@ def _content_pipeline(thema: str, kontext_md: str = '') -> dict:
                           f'LinkedIn-Post (von den anderen Agenten):\n{linkedin}'
                           f'\n\nBisheriger Instagram-Entwurf:\n{instagram}'
                           f'\n\nGeplantes Bild-Konzept (Prompt):\n{bildprompt}', 2000)
-    return {'brief': brief, 'linkedin': linkedin, 'newsletter': newsletter, 'instagram': instagram,
+    return {'brief': brief, 'linkedin': linkedin, 'instagram': instagram,
             'pruef': pruef, 'bildprompt': bildprompt, 'ig_experte': ig_experte}
 
 
@@ -560,12 +558,11 @@ def _content_speichern(eintrag: dict) -> str:
     return eintrag['id']
 
 
-def _content_aktualisieren(cid: str, linkedin: str, newsletter: str, instagram: str, ig_experte: str):
+def _content_aktualisieren(cid: str, linkedin: str, instagram: str, ig_experte: str):
     liste = _content_laden()
     for e in liste:
         if e.get('id') == cid:
             e['linkedin'] = (linkedin or '').strip()
-            e['newsletter'] = (newsletter or '').strip()
             e['instagram'] = (instagram or '').strip()
             e['ig_experte'] = (ig_experte or '').strip()
             _sichere(CONTENT_PATH, liste)
@@ -1332,7 +1329,7 @@ def _seite(inhalt: str, user=None) -> str:
         # nebeneinander ist das zu schmal.
         'main{max-width:min(1640px,97vw)}'
         '.feed{max-width:860px}'
-        '.dreier{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));'
+        '.dreier{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));'
         'gap:14px;align-items:start;margin-top:14px}'
         '.dreier>.statusbox{margin-top:0}'
         '.dreier textarea{min-height:360px}'
@@ -1623,7 +1620,6 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
     ergebnis = ''
     if res:
         li = res.get('linkedin') or ''
-        nl = res.get('newsletter') or ''
         ig = res.get('instagram') or ''
         ige = res.get('ig_experte') or ''
         # Oben steht, was abgegeben wird. Die Werkstatt - Briefing, Prüfbericht,
@@ -1637,10 +1633,6 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
             '<div class="step"><span class="ttl">LinkedIn-Post</span></div>'
             f'<textarea id="cli" name="linkedin" style="width:100%;margin-top:8px">{_esc(li)}</textarea>'
             f'<div class="row">{_kopier_btn("cli")}</div></div>'
-            '<div class="statusbox">'
-            '<div class="step"><span class="ttl">LinkedIn-Newsletter</span></div>'
-            f'<textarea id="cnl" name="newsletter" style="width:100%;margin-top:8px">{_esc(nl)}</textarea>'
-            f'<div class="row">{_kopier_btn("cnl")}</div></div>'
             '<div class="statusbox">'
             '<div class="step"><span class="ttl">Instagram (inkl. Bild-Briefing)</span></div>'
             f'<textarea id="cig" name="instagram" style="width:100%;margin-top:8px">{_esc(ig)}</textarea>'
@@ -1736,9 +1728,6 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
                 '<div><div class="hint" style="margin:4px 0 2px">LinkedIn-Post</div>'
                 f'<textarea id="al{_esc(cid)}" style="width:100%">{_esc(p.get("linkedin") or "")}</textarea>'
                 f'<div class="row" style="margin:4px 0 0">{_kopier_btn("al" + cid)}</div></div>'
-                '<div><div class="hint" style="margin:4px 0 2px">LinkedIn-Newsletter</div>'
-                f'<textarea id="an{_esc(cid)}" style="width:100%">{_esc(p.get("newsletter") or "")}</textarea>'
-                f'<div class="row" style="margin:4px 0 0">{_kopier_btn("an" + cid)}</div></div>'
                 '<div><div class="hint" style="margin:4px 0 2px">Instagram (inkl. Bild-Briefing)</div>'
                 f'<textarea id="ai{_esc(cid)}" style="width:100%">{_esc(p.get("instagram") or "")}</textarea>'
                 f'<div class="row" style="margin:4px 0 0">{_kopier_btn("ai" + cid)}</div></div>'
@@ -2076,11 +2065,10 @@ async def content_speichern(request: Request):
     form = await request.form()
     cid = (form.get('id') or '').strip()
     li = (form.get('linkedin') or '').strip()
-    nl = (form.get('newsletter') or '').strip()
     ig = (form.get('instagram') or '').strip()
     ige = (form.get('ig_experte') or '').strip()
     if cid:
-        _content_aktualisieren(cid, li, nl, ig, ige)
+        _content_aktualisieren(cid, li, ig, ige)
     return RedirectResponse('/content', status_code=303)
 
 
