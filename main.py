@@ -1328,7 +1328,18 @@ def _seite(inhalt: str, user=None) -> str:
         f'<title>{APP_NAME} &middot; Skyport Werkbank</title>'
         '<link rel="stylesheet" href="https://skyport-werkbank.sliplane.app/werkbank.css">'
         f'<style>:root{{--accent:{ACCENT}}}'
-        '.feed{max-width:820px}'
+        # Die Werkbank-Huelle ist auf 1080px gedeckelt - fuer drei Textfassungen
+        # nebeneinander ist das zu schmal.
+        'main{max-width:min(1640px,97vw)}'
+        '.feed{max-width:860px}'
+        '.dreier{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));'
+        'gap:14px;align-items:start;margin-top:14px}'
+        '.dreier>.statusbox{margin-top:0}'
+        '.dreier textarea{min-height:360px}'
+        '.klapp>summary{cursor:pointer;list-style:none;font-weight:600}'
+        '.klapp>summary::-webkit-details-marker{display:none}'
+        '.klapp>summary::after{content:" +";color:var(--muted)}'
+        '.klapp[open]>summary::after{content:" \\2212"}'
         '.feed h1{font-size:26px;margin:8px 0 2px}.feed h2{font-size:19px;margin:26px 0 8px;'
         'border-bottom:1px solid var(--line);padding-bottom:5px}'
         '.feed h3{font-size:16px;margin:20px 0 6px}'
@@ -1621,20 +1632,23 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
         ergebnis = (
             '<form method="post" action="/content/speichern">'
             f'<input type="hidden" name="id" value="{_esc(saved_id)}">'
-            '<div class="statusbox" style="margin-top:14px">'
+            '<div class="dreier">'
+            '<div class="statusbox">'
             '<div class="step"><span class="ttl">LinkedIn-Post</span></div>'
-            f'<textarea id="cli" name="linkedin" rows="12" style="width:100%;margin-top:8px">{_esc(li)}</textarea>'
+            f'<textarea id="cli" name="linkedin" style="width:100%;margin-top:8px">{_esc(li)}</textarea>'
             f'<div class="row">{_kopier_btn("cli")}</div></div>'
-            '<div class="statusbox" style="margin-top:14px">'
+            '<div class="statusbox">'
             '<div class="step"><span class="ttl">LinkedIn-Newsletter</span></div>'
-            f'<textarea id="cnl" name="newsletter" rows="16" style="width:100%;margin-top:8px">{_esc(nl)}</textarea>'
+            f'<textarea id="cnl" name="newsletter" style="width:100%;margin-top:8px">{_esc(nl)}</textarea>'
             f'<div class="row">{_kopier_btn("cnl")}</div></div>'
-            '<div class="statusbox" style="margin-top:14px">'
-            '<div class="step"><span class="ttl">Instagram-Fassung (inkl. Bild-Briefing)</span></div>'
-            f'<textarea id="cig" name="instagram" rows="12" style="width:100%;margin-top:8px">{_esc(ig)}</textarea>'
-            f'<div class="row">{_kopier_btn("cig")} '
-            '<button class="btn" type="submit">Bearbeitete Fassungen speichern</button></div></div>'
-            '<details class="statusbox" style="margin-top:14px">'
+            '<div class="statusbox">'
+            '<div class="step"><span class="ttl">Instagram (inkl. Bild-Briefing)</span></div>'
+            f'<textarea id="cig" name="instagram" style="width:100%;margin-top:8px">{_esc(ig)}</textarea>'
+            f'<div class="row">{_kopier_btn("cig")}</div></div>'
+            '</div>'
+            '<div class="row" style="margin-top:12px">'
+            '<button class="btn" type="submit">Bearbeitete Fassungen speichern</button></div>'
+            '<details class="statusbox klapp" style="margin-top:14px">'
             '<summary style="cursor:pointer"><b>Wie es entstanden ist</b> '
             '<span class="hint">Briefing, Prüfbericht, Instagram-Coaching</span></summary>'
             '<div class="step" style="margin-top:12px"><span class="ttl">Briefing (Kurator)</span></div>'
@@ -1702,8 +1716,11 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
     posts = _content_laden()
     archiv = ''
     if posts:
+        # Jeder gespeicherte Beitrag war bisher komplett aufgeklappt - vier
+        # Textfelder plus Bild- und Reel-Block, mal zehn Beitraege. Jetzt eine
+        # Zeile je Beitrag; nur der neueste steht offen.
         zeilen = ''
-        for p in posts:
+        for nr, p in enumerate(posts):
             cid = p.get('id') or ''
             thema_z = (f' &middot; <span style="color:var(--muted)">{_esc(p.get("thema"))}</span>'
                        if p.get('thema') else '')
@@ -1711,27 +1728,31 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
                       '<button class="btn ghost" type="submit">'
                       f'{"Instagram-Experte neu prüfen" if p.get("ig_experte") else "Instagram-Experte prüfen"}'
                       '</button></form>') if ki_aktiv else '')
+            erste = ' open' if nr == 0 else ''
             zeilen += (
-                '<div class="statusbox" style="margin-top:12px">'
-                f'<div class="hint" style="margin-bottom:6px">{_esc(p.get("datum") or "")}{thema_z}</div>'
-                '<div class="hint" style="margin:4px 0 2px">LinkedIn-Post</div>'
-                f'<textarea id="al{_esc(cid)}" rows="6" style="width:100%">{_esc(p.get("linkedin") or "")}</textarea>'
-                f'<div class="row" style="margin:4px 0 8px">{_kopier_btn("al" + cid)}</div>'
-                '<div class="hint" style="margin:4px 0 2px">LinkedIn-Newsletter</div>'
-                f'<textarea id="an{_esc(cid)}" rows="8" style="width:100%">{_esc(p.get("newsletter") or "")}</textarea>'
-                f'<div class="row" style="margin:4px 0 8px">{_kopier_btn("an" + cid)}</div>'
-                '<div class="hint" style="margin:4px 0 2px">Instagram (inkl. Bild-Briefing)</div>'
-                f'<textarea id="ai{_esc(cid)}" rows="6" style="width:100%">{_esc(p.get("instagram") or "")}</textarea>'
-                f'<div class="row" style="margin:4px 0 8px">{_kopier_btn("ai" + cid)}</div>'
-                '<div class="hint" style="margin:4px 0 2px">Instagram-Experte (Format · Caption · Strategie · Coaching)</div>'
-                f'<textarea id="ae{_esc(cid)}" rows="10" style="width:100%">{_esc(p.get("ig_experte") or "")}</textarea>'
-                f'<div class="row" style="margin-top:4px">{_kopier_btn("ae" + cid)} {igbtn}</div>'
+                f'<details class="statusbox klapp" style="margin-top:12px"{erste}>'
+                f'<summary>{_esc(p.get("datum") or "")}{thema_z}</summary>'
+                '<div class="dreier">'
+                '<div><div class="hint" style="margin:4px 0 2px">LinkedIn-Post</div>'
+                f'<textarea id="al{_esc(cid)}" style="width:100%">{_esc(p.get("linkedin") or "")}</textarea>'
+                f'<div class="row" style="margin:4px 0 0">{_kopier_btn("al" + cid)}</div></div>'
+                '<div><div class="hint" style="margin:4px 0 2px">LinkedIn-Newsletter</div>'
+                f'<textarea id="an{_esc(cid)}" style="width:100%">{_esc(p.get("newsletter") or "")}</textarea>'
+                f'<div class="row" style="margin:4px 0 0">{_kopier_btn("an" + cid)}</div></div>'
+                '<div><div class="hint" style="margin:4px 0 2px">Instagram (inkl. Bild-Briefing)</div>'
+                f'<textarea id="ai{_esc(cid)}" style="width:100%">{_esc(p.get("instagram") or "")}</textarea>'
+                f'<div class="row" style="margin:4px 0 0">{_kopier_btn("ai" + cid)}</div></div>'
+                '</div>'
                 + _bild_block(p, cid, gemini_aktiv, hat_refs)
                 + _reel_block(p, cid, gemini_aktiv, hat_refs)
+                + '<details class="klapp" style="margin-top:12px"><summary>Instagram-Coaching</summary>'
+                f'<textarea id="ae{_esc(cid)}" rows="10" style="width:100%;margin-top:8px">'
+                f'{_esc(p.get("ig_experte") or "")}</textarea>'
+                f'<div class="row" style="margin-top:4px">{_kopier_btn("ae" + cid)} {igbtn}</div></details>'
                 + '<div class="row" style="margin-top:10px">'
                 f'<form method="post" action="/content/{_esc(cid)}/loeschen" style="display:inline" '
                 'onsubmit="return confirm(\'Eintrag löschen?\')">'
-                '<button class="btn ghost" type="submit">Löschen</button></form></div></div>')
+                '<button class="btn ghost" type="submit">Löschen</button></form></div></details>')
         alle_btn = ((' <form method="post" action="/content/igcheck-alle" style="display:inline" '
                      "onsubmit=\"return confirm('Alle gespeicherten Inhalte vom Instagram-Experten prüfen "
                      "lassen? Das kann einen Moment dauern.')\">"
@@ -1754,7 +1775,10 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
 
     warn = (f'<div class="statusbox"><span class="badge warn">{hinweis}</span></div>' if hinweis else '')
     return (_platte('Content-Pipeline &ndash; Kurator &middot; Texter &middot; Prüfer, Freigabe durch dich')
-            + _subtabs('content') + kistat + warn + form + referenz_karte + stil_karte + ergebnis + archiv
+            + _subtabs('content') + kistat + warn + form + ergebnis + archiv
+            + '<details class="statusbox klapp" style="margin-top:14px">'
+              '<summary>Bilder-Einstellungen <span class="hint">Referenzfotos, Stilvorlagen, '
+              'Gemini-Test</span></summary>' + referenz_karte + stil_karte + '</details>'
             + sicherung_karte)
 
 
