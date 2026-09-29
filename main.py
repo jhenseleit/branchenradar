@@ -760,25 +760,44 @@ def _erzeuge_bild(prompt: str, ref_paths, stil_paths=None):
 
 
 def _gemini_selftest() -> str:
-    """Minimaler Gemini-Bildaufruf ohne Referenzfoto. -> 'OK' oder Fehlertext."""
+    """Testbild je Modell. Sagt, WELCHES Modell wirklich liefert - sonst merkt
+    niemand, dass still auf das schwaechere Flash-Modell zurueckgefallen wird."""
     key = os.environ.get('GEMINI_API_KEY')
     if not key:
         return 'GEMINI_API_KEY ist nicht gesetzt.'
-    try:
-        from google import genai
-        from google.genai import types
-        client = genai.Client(api_key=key)
-        resp = client.models.generate_content(
-            model=GEMINI_BILD_MODELL,
-            contents=['Ein einfaches, neutrales Testbild: eine schlichte hellgraue Fläche.'],
-            config=types.GenerateContentConfig(response_modalities=['IMAGE']))
-        for part in (getattr(resp, 'parts', None) or []):
-            inline = getattr(part, 'inline_data', None)
-            if inline is not None and getattr(inline, 'data', None):
-                return 'OK'
-        return 'Verbindung stand, aber kein Bild in der Antwort (evtl. Safety-Filter oder Nur-Text).'
-    except Exception as e:  # noqa: BLE001
-        return 'FEHLER: ' + str(e)[:400]
+    from google import genai
+    from google.genai import types
+    client = genai.Client(api_key=key)
+
+    def versuch(modell):
+        try:
+            resp = client.models.generate_content(
+                model=modell,
+                contents=['Ein einfaches, neutrales Testbild: eine schlichte hellgraue Fläche.'],
+                config=types.GenerateContentConfig(response_modalities=['IMAGE']))
+            for part in (getattr(resp, 'parts', None) or []):
+                inline = getattr(part, 'inline_data', None)
+                if inline is not None and getattr(inline, 'data', None):
+                    return True, 'liefert Bilder'
+            return False, 'antwortet, aber ohne Bild (Safety-Filter oder Nur-Text)'
+        except Exception as e:  # noqa: BLE001
+            return False, str(e)[:200]
+
+    zeilen, gut = [], None
+    for modell in [m for m in (GEMINI_BILD_MODELL, GEMINI_BILD_FALLBACK) if m]:
+        ok, text = versuch(modell)
+        zeilen.append(('OK   ' if ok else 'nein ') + modell + ' – ' + text)
+        if ok and gut is None:
+            gut = modell
+        if ok and modell == GEMINI_BILD_MODELL:
+            break
+    if gut is None:
+        return 'FEHLER: kein Bildmodell liefert.\n' + '\n'.join(zeilen)
+    kopf = ('OK – Bilder kommen von ' + gut
+            + ('' if gut == GEMINI_BILD_MODELL else
+               ' (RÜCKFALL: das bessere Modell ' + GEMINI_BILD_MODELL + ' ist für diesen Schlüssel '
+               'nicht freigeschaltet – über GEMINI_BILD_MODELL ein anderes eintragen)'))
+    return kopf + '\n' + '\n'.join(zeilen)
 
 
 def _font(size: int, bold: bool = True):
