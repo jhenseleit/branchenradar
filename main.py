@@ -50,7 +50,10 @@ AUDIT_DB = DATA_DIR / 'audit.db'
 
 MODELL = os.environ.get('BRANCHENRADAR_MODELL', 'claude-opus-5')
 # Nano Banana = Googles Gemini Bildmodell (eigener GEMINI_API_KEY, eigene Abrechnung)
-GEMINI_BILD_MODELL = os.environ.get('GEMINI_BILD_MODELL', 'gemini-2.5-flash-image')
+# Das Flash-Modell ist schnell, aber sichtbar schwaecher. Voreinstellung jetzt das
+# hochwertigere Bildmodell; ueber die Umgebungsvariable weiter tauschbar.
+GEMINI_BILD_MODELL = os.environ.get('GEMINI_BILD_MODELL', 'gemini-3-pro-image-preview')
+GEMINI_BILD_FALLBACK = os.environ.get('GEMINI_BILD_FALLBACK', 'gemini-2.5-flash-image')
 GEMINI_BILD_FORMAT = os.environ.get('GEMINI_BILD_FORMAT', '4:5')  # Instagram-Hochformat
 # Standort fürs Live-Wetter (Outfit passend zum Tag). Default: Oberpfalz (Ebermannsdorf/Kümmersbruck).
 WETTER_LAT = os.environ.get('WETTER_LAT', '49.38')
@@ -224,6 +227,40 @@ def _kontext_setzen(an: bool):
     _sichere(DATA_DIR / 'content_ui.json', {'kontext': bool(an)})
 
 
+# Beitragsformate. Vorher hatte jeder Post denselben Bauplan (scharfer Einstieg,
+# Beispiel, Einordnung, Frage) - nach fuenf Posts erkennt das jeder. Der Kurator
+# waehlt jetzt das Format, das zum Thema passt, und begruendet die Wahl.
+FORMATE = (
+    ('haltung', 'Haltung / gegen den Strich',
+     'Eine verbreitete Annahme der Branche benennen und begründet widersprechen. Endet mit einer '
+     'ehrlichen Frage, nicht mit einer Belehrung.'),
+    ('zahlen', 'Zahlen-Post',
+     'Eine belegte Zahl als Einstieg, dann was sie praktisch bedeutet – für Händler, für Lieferanten. '
+     'Nur Zahlen aus der Faktengrundlage.'),
+    ('fall', 'Fall aus dem Alltag',
+     'Eine kurze, konkrete Begebenheit aus dem Skyport-Alltag (Anfrage, Lieferung, Gespräch, Fehler), '
+     'daraus die allgemeine Einsicht. Nah, ohne Anekdotenkitsch.'),
+    ('vorher_nachher', 'Vorher / Nachher',
+     'Wie es war, was sich geändert hat, was das für die Arbeit heißt. Gut für Prozesse, Regeln, '
+     'Marktbewegungen.'),
+    ('liste', 'Liste mit Substanz',
+     'Drei bis fünf Punkte, jeder mit einem Satz Begründung – keine Floskellisten. Gut für '
+     '„worauf man achten muss".'),
+    ('frage', 'Frage an die Branche',
+     'Eine echte, unbeantwortete Frage aufwerfen, den eigenen Stand dazu offenlegen und um Erfahrungen '
+     'bitten. Nur, wenn die Frage wirklich offen ist.'),
+    ('rueckblick', 'Rückblick / Prognose',
+     'Was sich über einen längeren Zeitraum verschoben hat und wohin es läuft – mit Jahreszahlen.'),
+    ('erklaerstueck', 'Erklärstück',
+     'Einen Mechanismus erklären, den viele falsch verstehen (Zentralregulierung, Frachtlogik, '
+     'Listungsprozess). Sachlich, ohne Dozententon.'),
+)
+
+
+def _formate_text() -> str:
+    return '\n'.join(f'- {k} — {t}: {b}' for k, t, b in FORMATE)
+
+
 KURATOR_DEFAULT = (
     'Du bist der Themen-Kurator für die Person, die oben im Profil beschrieben ist.\n\n'
     'Aufgabe: Wähle aus dem Thema des Nutzers und der Faktengrundlage den EINEN stärksten, '
@@ -233,6 +270,12 @@ KURATOR_DEFAULT = (
     '- **Kerngedanke:** 2–3 Sätze aus Lieferantensicht.\n'
     '- **Fakten & Quellen:** nur belegte Zahlen/Aussagen aus der Faktengrundlage, je mit Quelle.\n'
     '- **Warum jetzt:** ein Satz zur Relevanz.\n'
+    '- **Format:** der Schlüssel EINES Formats aus der Liste unten, dann ein Halbsatz, warum genau '
+    'dieses zum Thema passt. Nimm nicht immer dasselbe – das Thema entscheidet.\n'
+    '- **Hooks:** DREI deutlich verschiedene erste Zeilen zur Auswahl, je eine pro Zeile, nummeriert. '
+    'Die erste Zeile entscheidet, ob der Rest gelesen wird; variiere den Ansatz (Zahl, Widerspruch, '
+    'Szene, Frage) statt dreimal dieselbe Idee.\n\n'
+    'FORMATE:\n' + _formate_text() + '\n\n'
     'Wenn keine belegte Zahl zum Thema passt, sag das offen und schlage einen tragfähigen Blickwinkel '
     'ohne erfundene Zahlen vor. Gib nur das Briefing als Markdown zurück.')
 
@@ -242,11 +285,12 @@ TEXTER_DEFAULT = (
     'Erzeuge aus dem Briefing DREI Fassungen desselben Themas und trenne sie EXAKT mit diesen '
     'Markierungen, jeweils in einer eigenen Zeile:\n'
     '[LINKEDIN]\n'
-    'Der LinkedIn-Beitrag (Post): ausgearbeitet und substanziell, ca. 180–320 Wörter, nach Jörns Muster: '
-    'ein kurzer, scharfer und ALLEIN stehender Eröffnungssatz (gern leicht gegen den Strich); dann ein '
-    'KONKRETES Beispiel aus dem echten Skyport-/Branchenalltag mit echten Namen, Zahlen oder Daten; eine '
-    'ruhige, zugespitzte Einordnung/Haltung; am Ende eine ehrliche, offene Frage an die Leser (Anrede in '
-    'der Regel „Sie"). Absätze mit Luft, gesprochenes Register. Hashtags spielen kaum noch eine Rolle: '
+    'Der LinkedIn-Beitrag (Post): ausgearbeitet und substanziell, ca. 180–320 Wörter. FOLGE DEM FORMAT, '
+    'das im Briefing steht – nicht jedes Mal demselben Bauplan. Nimm eine der drei Hooks aus dem '
+    'Briefing als ALLEIN stehende erste Zeile (die stärkste; du darfst sie schärfen). Im Beitrag steht '
+    'IMMER etwas Konkretes aus dem echten Skyport-/Branchenalltag – Namen, Zahlen, Daten – und eine '
+    'erkennbare Haltung. Ob am Ende eine Frage steht, entscheidet das Format; nicht jeder Beitrag muss '
+    'mit einer Frage enden. Anrede in der Regel „Sie". Absätze mit Luft, gesprochenes Register. Hashtags spielen kaum noch eine Rolle: '
     'höchstens 0–3 sehr gezielte am Ende (oder gar keine), keine Hashtag-Wolke; relevante Suchbegriffe '
     'lieber direkt in den Text.\n'
     '[NEWSLETTER]\n'
@@ -289,19 +333,15 @@ PRUEFER_DEFAULT = (
 BILDPROMPT_DEFAULT = (
     'Du bist Bild-Prompt-Designer für die LinkedIn-/Instagram-Bilder der Person aus dem Profil oben.\n\n'
     'Aus dem Beitrag baust du EINEN fertigen Bild-Prompt für Googles Bildmodell (Nano Banana / Gemini).\n'
-    'Immer gilt: ein hochwertiges, professionelles Foto der Referenzperson (Jörn) – souverän, sympathisch '
-    'und gepflegt, hell und vorteilhaft beleuchtet, gestochen scharf, Premium-Qualität. Die Person wirkt '
-    'LOCKER und NATÜRLICH – entspannte Körperhaltung, offener, sympathischer Ausdruck (gern ein leichtes '
-    'Lächeln), NICHT steif oder verkrampft-gestellt; sie darf auch mal seitlich, in Bewegung oder im Tun '
-    'sein statt nur starr in die Kamera zu blicken. KEIN düsterer, körniger oder dokumentarischer Look. '
-    'Wahre Gesicht und Identität genau (gepflegter kurzer Bart, klare runde Brille, gepflegtes '
-    'Erscheinungsbild).\n\n'
-    'WICHTIG – Stimmung: Das Bild soll WARM, EINLADEND und PERSÖNLICH wirken, mit „Gemütlichkeit" und '
-    'echter Ausstrahlung – NICHT kühl, glatt, steril oder wie ein Corporate-Stockfoto. Nutze warmes, '
-    'weiches Licht (goldene, warme Töne; kein hartes, klinisch-kaltes Studiolicht), eine lebendige, '
-    'gelebte Umgebung mit persönlichen, warmen Details (Holz, Pflanzen, weiche Materialien, eine '
-    'Kaffeetasse, kleine persönliche Gegenstände) statt leerer, glatter Flächen. Ein echter, warmer, '
-    'nahbarer Moment mit Persönlichkeit.\n\n'
+    'Immer gilt: ein Foto der Referenzperson (Jörn), gestochen scharf, korrekt belichtet. Die Person '
+    'wirkt locker und natürlich – entspannte Haltung, offener Ausdruck, gern seitlich oder im Tun statt '
+    'starr in die Kamera. Gesicht und Identität genau wahren (kurzer Bart, runde Brille).\n'
+    'Halte den Prompt KURZ und konkret: Szene, Handlung, Licht, Bildausschnitt. Schreibe, was zu SEHEN '
+    'ist, nicht wie es wirken soll – Ketten aus Stimmungsadjektiven verwässern das Ergebnis. Nenne eine '
+    'Brennweite und eine Blende (z. B. 35 mm, f/2.0) statt Wörtern wie „Premium-Qualität".\n\n'
+    'Stimmung: warmes, weiches Tageslicht statt hartem Studiolicht; eine gelebte Umgebung statt leerer '
+    'Flächen. Nenne dafür HÖCHSTENS zwei konkrete Details, die zur Szene gehören – eine lange Liste '
+    'aus Stimmungswörtern macht das Bild beliebig, nicht wärmer.\n\n'
     'WICHTIG – Themenbezug: Die Szene MUSS den Kern des Themas/Beitrags sichtbar aufgreifen (durch '
     'Handlung, Umgebung oder passende Requisiten, die zum konkreten Beitrag passen) und darf NIE ein '
     'beliebiges, themenfremdes Porträt oder ein halb leeres Bild sein. Das Bild soll sowohl im LinkedIn- '
@@ -378,9 +418,13 @@ IDEEN_DEFAULT = (
     'ihrer Haltung passen – aus Lieferantensicht ebenso wie aus dem persönlichen/ehrenamtlichen Bereich, '
     'wenn es passt. Keine ausgelutschten Motivationsthemen, keine Beratersprech-Titel. Jede Idee ist ein '
     'konkreter Aufhänger, aus dem sich ein Beitrag bauen lässt – nicht nur ein Schlagwort.\n'
-    'Format: eine Idee pro Zeile, jeweils beginnend mit „- ", der Aufhänger in einem Satz (optional ein '
-    'knapper Halbsatz zum Blickwinkel). Keine Nummerierung, keine Überschrift, keine Einleitung, keine '
-    'Erklärung – nur die Liste.')
+    'Liegt ein Branchenüberblick bei, ist er die Grundlage: Jede Idee haengt an einer konkreten Stelle '
+    'daraus – ein Ereignis, eine Zahl, eine Meldung, ein Name – und sagt in einem Halbsatz, WARUM JETZT. '
+    'Erfinde nichts dazu; was nicht im Überblick steht, behauptest du nicht. Zeitlose Themen ohne '
+    'Aufhänger sind das, was niemand liest – höchstens zwei davon, und nur wenn sie wirklich tragen.\n'
+    'Format: eine Idee pro Zeile, jeweils beginnend mit „- ", der Aufhänger in einem Satz, dann „ — " '
+    'und der Anlass mit Datum oder Quelle aus dem Überblick. Keine Nummerierung, keine Überschrift, '
+    'keine Einleitung, keine Erklärung – nur die Liste.')
 
 
 def _content_prompts() -> dict:
@@ -555,13 +599,44 @@ def _thema_loeschen(tid: str):
     _sichere(TOPICS_PATH, [t for t in _themen_laden() if t.get('id') != tid])
 
 
+def _schon_gepostet(n: int = 20):
+    """Die zuletzt bearbeiteten Themen - damit der Ideengeber sich nicht wiederholt."""
+    raus = []
+    for e in (_content_laden() or [])[:n]:
+        t = str(e.get('thema') or '').strip()
+        if t:
+            raus.append(t)
+    for e in (_themen_laden() or [])[:n]:
+        t = str(e.get('titel') or '').strip()
+        if t and t not in raus:
+            raus.append(t)
+    return raus[:n]
+
+
 def _ideen_generieren(fokus: str = '', anzahl: int = 12):
-    """KI schlägt Themen aus dem Profil (+ optionalem Fokus) vor. -> Liste von Strings."""
+    """KI schlägt Themen vor - auf Grundlage des AKTUELLEN Branchenüberblicks.
+
+    Vorher bekam der Ideengeber nur das Profil. Aus einer Selbstbeschreibung
+    koennen aber nur zeitlose Allgemeinplaetze entstehen; der Aufhaenger steht
+    im Ueberblick, den das Werkzeug ohnehin jede Woche mit Websuche erzeugt."""
     p = _content_prompts()
     user = f'{_heute_zeile()}\n\nSchlage {anzahl} konkrete Themen/Aufhänger vor.'
+    bs = _lade(BRIEF_PATH, []) or []
+    md = (bs[0].get('md') or '') if bs else ''
+    if md.strip():
+        stand = str(bs[0].get('datum') or '').strip()
+        user += (f'\n\nAKTUELLER BRANCHENÜBERBLICK (Stand {stand}) – hier stehen die Aufhänger. '
+                 'Jede Idee muss sich auf eine konkrete Stelle daraus stützen:\n\n' + md[:14000])
+    else:
+        user += ('\n\n(Es liegt noch kein Branchenüberblick vor – sag das in der ersten Zeile und '
+                 'schlage nur Themen vor, die ohne aktuelle Fakten tragen.)')
+    schon = _schon_gepostet()
+    if schon:
+        user += ('\n\nSCHON BEARBEITET – nicht wiederholen, auch nicht in anderer Formulierung:\n- '
+                 + '\n- '.join(schon))
     if (fokus or '').strip():
         user += f'\n\nAktueller Fokus / Wunschrichtung des Nutzers:\n{fokus.strip()}'
-    text = _ki_text(_mit_profil(p['ideen'], mit_stil=True), user, 1500)
+    text = _ki_text(_mit_profil(p['ideen'], mit_stil=True), user, 2500)
     ideen = []
     for zeile in (text or '').splitlines():
         z = zeile.strip().lstrip('-*•').strip()
@@ -664,7 +739,14 @@ def _erzeuge_bild(prompt: str, ref_paths, stil_paths=None):
     try:
         resp = _call(True)
     except Exception:  # noqa: BLE001 - ältere SDKs kennen aspect_ratio evtl. nicht
-        resp = _call(False)
+        try:
+            resp = _call(False)
+        except Exception:  # noqa: BLE001 - Modell nicht freigeschaltet: auf Flash zurück
+            if not GEMINI_BILD_FALLBACK or GEMINI_BILD_FALLBACK == GEMINI_BILD_MODELL:
+                raise
+            resp = client.models.generate_content(
+                model=GEMINI_BILD_FALLBACK, contents=contents,
+                config=types.GenerateContentConfig(response_modalities=['IMAGE']))
 
     for part in (getattr(resp, 'parts', None) or []):
         inline = getattr(part, 'inline_data', None)
@@ -1514,14 +1596,10 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
         nl = res.get('newsletter') or ''
         ig = res.get('instagram') or ''
         ige = res.get('ig_experte') or ''
+        # Oben steht, was abgegeben wird. Die Werkstatt - Briefing, Prüfbericht,
+        # Instagram-Coaching - liegt darunter zugeklappt: man braucht sie selten,
+        # aber sie ist da.
         ergebnis = (
-            '<div class="statusbox" style="margin-top:14px">'
-            '<div class="step"><span class="ttl">1 &middot; Briefing (Kurator)</span></div>'
-            f'<div class="feed">{_md_html(res.get("brief") or "")}</div></div>'
-            '<div class="statusbox laeuft" style="margin-top:14px">'
-            '<div class="step"><span class="ttl">Prüfbericht (Prüfer)</span></div>'
-            f'<div class="feed">{_md_html(res.get("pruef") or "")}</div>'
-            '<p class="hint" style="margin:6px 0 0">Vorprüfung &ndash; die finale Freigabe machst du.</p></div>'
             '<form method="post" action="/content/speichern">'
             f'<input type="hidden" name="id" value="{_esc(saved_id)}">'
             '<div class="statusbox" style="margin-top:14px">'
@@ -1535,12 +1613,20 @@ def _content_html(res=None, thema='', saved_id='', hinweis=''):
             '<div class="statusbox" style="margin-top:14px">'
             '<div class="step"><span class="ttl">Instagram-Fassung (inkl. Bild-Briefing)</span></div>'
             f'<textarea id="cig" name="instagram" rows="12" style="width:100%;margin-top:8px">{_esc(ig)}</textarea>'
-            f'<div class="row">{_kopier_btn("cig")}</div></div>'
-            '<div class="statusbox laeuft" style="margin-top:14px">'
-            '<div class="step"><span class="ttl">Instagram-Experte &middot; Format · Caption · Strategie · Coaching</span></div>'
-            f'<textarea id="cige" name="ig_experte" rows="16" style="width:100%;margin-top:8px">{_esc(ige)}</textarea>'
-            f'<div class="row">{_kopier_btn("cige")} '
+            f'<div class="row">{_kopier_btn("cig")} '
             '<button class="btn" type="submit">Bearbeitete Fassungen speichern</button></div></div>'
+            '<details class="statusbox" style="margin-top:14px">'
+            '<summary style="cursor:pointer"><b>Wie es entstanden ist</b> '
+            '<span class="hint">Briefing, Prüfbericht, Instagram-Coaching</span></summary>'
+            '<div class="step" style="margin-top:12px"><span class="ttl">Briefing (Kurator)</span></div>'
+            f'<div class="feed">{_md_html(res.get("brief") or "")}</div>'
+            '<div class="step" style="margin-top:12px"><span class="ttl">Prüfbericht (Prüfer)</span></div>'
+            f'<div class="feed">{_md_html(res.get("pruef") or "")}</div>'
+            '<p class="hint" style="margin:6px 0 0">Vorprüfung &ndash; die finale Freigabe machst du.</p>'
+            '<div class="step" style="margin-top:14px"><span class="ttl">Instagram-Experte '
+            '&middot; Format · Caption · Strategie</span></div>'
+            f'<textarea id="cige" name="ig_experte" rows="14" style="width:100%;margin-top:8px">{_esc(ige)}</textarea>'
+            f'<div class="row">{_kopier_btn("cige")}</div></details>'
             '</form>')
 
     # Referenzfotos-Karte (Basis für die Bilderzeugung)
